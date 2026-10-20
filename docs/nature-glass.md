@@ -3,8 +3,9 @@
 The TFT build displays a 320 × 480 photograph with translucent navy cards.
 The eight cards show Chip, Uptime, Free Heap, PSRAM Total, PSRAM Free, Flash,
 Resolution, and Refresh. The five color fills and graphics startup test still
-run before the dashboard. There is no live weather or wall-clock card. Wi-Fi
-and NTP setup are documented separately in [Wi-Fi setup](wifi-setup.md).
+run before the dashboard. There is no live weather. After NTP sync, a small
+top photo panel shows local Israel time and date; the eight diagnostic cards
+remain in place. Wi-Fi and NTP setup are documented in [Wi-Fi setup](wifi-setup.md).
 
 ## Photograph and license
 

@@ -45,9 +45,15 @@ available for another try. If you did not retain the AP password, use USB
 ## Clock and security
 
 After obtaining a local IP address, the device starts NTP and applies the
-Asia/Jerusalem POSIX rule `IST-2IDT,M3.4.4/26,M10.5.0`. It does not display a
-wall clock. It tracks clock sync separately from local Wi-Fi connectivity; an
-NTP failure does not change the Wi-Fi indicator or trigger setup. The rule was
+Asia/Jerusalem POSIX rule `IST-2IDT,M3.4.4/26,M10.5.0`. The top photo panel
+shows `HH:mm` with the English weekday and `DD/MM/YYYY` underneath once NTP
+has succeeded. Before the first sync it shows no clock. It samples local time
+once a second and redraws only that panel when the minute or date changes.
+After a successful sync, the clock continues through a Wi-Fi outage using the
+running system clock. The setup password temporarily occupies the same panel
+while revealed; the clock returns when the password hides. It tracks clock sync
+separately from local Wi-Fi connectivity; an NTP failure does not change the
+Wi-Fi indicator or trigger setup. The rule was
 checked against IANA `Asia/Jerusalem` immediately around the March and October
 2026 transitions. Future changes to Israel's DST law may require an update.
 
@@ -96,7 +102,9 @@ dashboard render workload measurement, not a network or frame-rate measure.
 - [ ] `wifi setup` and `wifi show` work over USB while online; the portal is not
       usable through the home-network IP.
 - [ ] Serial reports LAN online separately from pending NTP; when internet is
-      available, clock synchronization is reported.
+      available, clock synchronization is reported. Before that message, no
+      time/date is shown. Afterwards, compare the 24-hour clock, weekday, and
+      date with a phone set to Asia/Jerusalem; check a minute rollover.
 - [ ] Leave the display running for several hours and inspect refresh, loop
       gap, heap, and PSRAM logs both with and without portal activity.
 

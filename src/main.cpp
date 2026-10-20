@@ -50,6 +50,7 @@ void loop() {
   if (wifi.ap_active) network_manager.copySetupPassword(setup_password, sizeof(setup_password));
   display_manager.updateNetwork(wifi_label, wifi.ap_active, wifi.initial_setup,
                                 setup_password, network_manager.takeRevealRequest(), now_ms);
+  display_manager.updateClock(wifi.clock_synced, now_ms);
   memset(setup_password, 0, sizeof(setup_password));
 
   if (last_loop_ms) max_loop_gap_ms = max(max_loop_gap_ms, now_ms - last_loop_ms);

@@ -6,6 +6,7 @@
 #include "BackgroundAsset.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #ifndef LOAD_FONT2
 #error "Nature Glass values require TFT_eSPI font 2"
@@ -256,8 +257,7 @@ void DisplayManager::drawNetworkStatus() {
 }
 
 void DisplayManager::drawSetupPanel(bool visible) {
-  if (background_ready_) streamAssetRegion(kBackgroundPixels, 20, 90, 280, 60);
-  else tft_.fillRect(20, 90, 280, 60, kNavy);
+  restoreTopPanelRegion();
   if (visible) {
     tft_.fillRoundRect(22, 91, 276, 58, 10, kNavy);
     tft_.drawRoundRect(22, 91, 276, 58, 10, kTurquoise);
@@ -273,6 +273,67 @@ void DisplayManager::drawSetupPanel(bool visible) {
     tft_.drawString("RECORD THIS PASSWORD", 31, 138);
   }
   setup_panel_visible_ = visible;
+  clock_visible_ = false;
+  clock_dirty_ = true;
+}
+
+void DisplayManager::restoreTopPanelRegion() {
+  // This is the same even-width photo region used by the temporary AP panel.
+  if (background_ready_) streamAssetRegion(kBackgroundPixels, 20, 90, 280, 60);
+  else tft_.fillRect(20, 90, 280, 60, kNavy);
+}
+
+void DisplayManager::drawClockPanel(const char* time_text, const char* weekday,
+                                    const char* date_text) {
+  restoreTopPanelRegion();
+  tft_.fillRoundRect(22, 91, 276, 58, 10, kNavy);
+  tft_.drawRoundRect(22, 91, 276, 58, 10, kTurquoise);
+  tft_.setTextFont(2);
+  tft_.setTextSize(2);
+  tft_.setTextColor(TFT_WHITE);
+  tft_.drawString(time_text, 31, 94);
+  tft_.setTextSize(1);
+  tft_.setTextColor(kTurquoise);
+  tft_.drawString(weekday, 31, 129);
+  const int16_t separator_x = 31 + tft_.textWidth(weekday, 2) + 9;
+  tft_.fillCircle(separator_x, 137, 2, kOrange);
+  tft_.setTextColor(TFT_WHITE);
+  tft_.drawString(date_text, separator_x + 9, 129);
+  clock_visible_ = true;
+  clock_dirty_ = false;
+}
+
+void DisplayManager::updateClock(bool ntp_synced, uint32_t now_ms) {
+  if (ntp_synced) clock_was_synced_ = true;
+  if (!dashboard_ready_ || !clock_was_synced_ || setup_panel_visible_) return;
+  // Sample once a second; HH:mm only needs a redraw when the minute or date changes.
+  if (!clock_dirty_ && static_cast<uint32_t>(now_ms - last_clock_sample_ms_) < 1000U) return;
+  last_clock_sample_ms_ = now_ms;
+  const time_t epoch = time(nullptr);
+  struct tm local = {};
+  if (!localtime_r(&epoch, &local) || local.tm_year < 124 || local.tm_year >= 200 ||
+      local.tm_wday < 0 || local.tm_wday > 6) {
+    if (clock_visible_ || clock_dirty_) restoreTopPanelRegion();
+    clock_visible_ = false;
+    clock_dirty_ = false;
+    cached_clock_time_[0] = '\0';
+    return;
+  }
+  constexpr const char* kWeekdays[] = {"Sunday", "Monday", "Tuesday", "Wednesday",
+                                       "Thursday", "Friday", "Saturday"};
+  char time_text[6];
+  char date_text[16];
+  snprintf(time_text, sizeof(time_text), "%02d:%02d", local.tm_hour, local.tm_min);
+  snprintf(date_text, sizeof(date_text), "%02d/%02d/%04d", local.tm_mday,
+           local.tm_mon + 1, local.tm_year + 1900);
+  if (clock_dirty_ || strcmp(cached_clock_time_, time_text) != 0 ||
+      strcmp(cached_clock_date_, date_text) != 0 || cached_weekday_ != local.tm_wday) {
+    drawClockPanel(time_text, kWeekdays[local.tm_wday], date_text);
+    memcpy(cached_clock_time_, time_text, sizeof(time_text));
+    strncpy(cached_clock_date_, date_text, sizeof(cached_clock_date_) - 1);
+    cached_clock_date_[sizeof(cached_clock_date_) - 1] = '\0';
+    cached_weekday_ = static_cast<uint8_t>(local.tm_wday);
+  }
 }
 
 void DisplayManager::updateNetwork(const char* status, bool ap_active,
@@ -295,7 +356,16 @@ void DisplayManager::updateNetwork(const char* status, bool ap_active,
   }
   const bool visible = ap_active && reveal_until_ms_ &&
                        static_cast<int32_t>(now_ms - reveal_until_ms_) < 0;
-  if (visible != setup_panel_visible_) drawSetupPanel(visible);
+  if (visible != setup_panel_visible_) {
+    if (!visible && clock_was_synced_) {
+      // updateClock runs next in this loop and replaces the password directly.
+      setup_panel_visible_ = false;
+      clock_visible_ = false;
+      clock_dirty_ = true;
+    } else {
+      drawSetupPanel(visible);
+    }
+  }
   if (!ap_active) {
     reveal_until_ms_ = 0;
     memset(setup_password_, 0, sizeof(setup_password_));
