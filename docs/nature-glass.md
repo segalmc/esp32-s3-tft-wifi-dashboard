@@ -3,7 +3,8 @@
 The TFT build displays a 320 × 480 photograph with translucent navy cards.
 The eight cards show Chip, Uptime, Free Heap, PSRAM Total, PSRAM Free, Flash,
 Resolution, and Refresh. The five color fills and graphics startup test still
-run before the dashboard. There is no live weather or clock data.
+run before the dashboard. There is no live weather or wall-clock card. Wi-Fi
+and NTP setup are documented separately in [Wi-Fi setup](wifi-setup.md).
 
 ## Photograph and license
 
@@ -61,7 +62,8 @@ aligned buffer before calling `pushPixels`. Each value's `x` is even and the
 120-pixel restore width is even, keeping source rows aligned and avoiding an
 odd-width tail read in the library's faster path. TFT_eSPI's
 `const uint16_t*` overload copies flash pixels into an aligned row buffer.
-This fix follows code inspection and awaits confirmation on the display.
+The user confirmed that this byte-order fix renders the photograph and cards
+correctly on the physical display.
 
 **Refresh** is the elapsed microseconds for one dashboard sampling and changed
 value rendering pass, from just before the Chip sample through the Resolution
@@ -105,7 +107,7 @@ Check the six startup phases, then verify the photo orientation, all eight
 values, and one-second updates. Watch Uptime and heap/PSRAM values for several
 minutes: changed text should leave no black rectangle, and Serial should
 continue reporting frame time, refresh time, free heap, and free PSRAM. The
-byte-order fix has not yet been validated on the physical display.
+byte-order fix was confirmed on the physical display before Wi-Fi integration.
 
 ## On-device image diagnostic
 

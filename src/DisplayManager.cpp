@@ -240,6 +240,66 @@ void DisplayManager::drawDashboardFrame() {
                 static_cast<unsigned long>(micros() - started_us), ESP.getFreeHeap(),
                 ESP.getFreePsram(), ESP.getPsramSize(),
                 background_ready_ ? "yes" : "fallback");
+  dashboard_ready_ = true;
+}
+
+void DisplayManager::drawNetworkStatus() {
+  // Restore only this even-width header region from the proven RGB565 path.
+  if (background_ready_) streamAssetRegion(kBackgroundPixels, 194, 47, 110, 22);
+  else tft_.fillRect(194, 47, 110, 22, 0x11E8);
+  tft_.fillRoundRect(196, 48, 106, 19, 6, kNavy);
+  tft_.setTextFont(1);
+  tft_.setTextSize(1);
+  tft_.setTextColor(kTurquoise);
+  tft_.drawString(network_status_, 202, 54);
+  network_status_dirty_ = false;
+}
+
+void DisplayManager::drawSetupPanel(bool visible) {
+  if (background_ready_) streamAssetRegion(kBackgroundPixels, 20, 90, 280, 60);
+  else tft_.fillRect(20, 90, 280, 60, kNavy);
+  if (visible) {
+    tft_.fillRoundRect(22, 91, 276, 58, 10, kNavy);
+    tft_.drawRoundRect(22, 91, 276, 58, 10, kTurquoise);
+    tft_.setTextFont(1);
+    tft_.setTextSize(1);
+    tft_.setTextColor(kTurquoise);
+    tft_.drawString("SETUP AP  /  192.168.4.1", 31, 99);
+    tft_.setTextFont(2);
+    tft_.setTextColor(TFT_WHITE);
+    tft_.drawString(setup_password_, 31, 116);
+    tft_.setTextFont(1);
+    tft_.setTextColor(kOrange);
+    tft_.drawString("RECORD THIS PASSWORD", 31, 138);
+  }
+  setup_panel_visible_ = visible;
+}
+
+void DisplayManager::updateNetwork(const char* status, bool ap_active,
+                                   bool initial_setup, const char* ap_password,
+                                   bool reveal, uint32_t now_ms) {
+  if (strncmp(network_status_, status, sizeof(network_status_)) != 0) {
+    strncpy(network_status_, status, sizeof(network_status_) - 1);
+    network_status_[sizeof(network_status_) - 1] = '\0';
+    network_status_dirty_ = true;
+  }
+  if (!dashboard_ready_) return;
+  if (network_status_dirty_) drawNetworkStatus();
+  if (ap_active && ap_password && ap_password[0]) {
+    memcpy(setup_password_, ap_password, sizeof(setup_password_));
+    if (initial_setup && !initial_password_shown_) {
+      reveal_until_ms_ = now_ms + 60000U;
+      initial_password_shown_ = true;
+    }
+    if (reveal) reveal_until_ms_ = now_ms + 60000U;
+  }
+  const bool visible = ap_active && reveal_until_ms_ &&
+                       static_cast<int32_t>(now_ms - reveal_until_ms_) < 0;
+  if (visible != setup_panel_visible_) drawSetupPanel(visible);
+  if (!ap_active) {
+    reveal_until_ms_ = 0;
+    memset(setup_password_, 0, sizeof(setup_password_));
+  }
 }
 
 void DisplayManager::streamAssetRegion(const uint16_t* pixels, int16_t x,
@@ -320,6 +380,7 @@ void DisplayManager::updateDashboard() {
   snprintf(value, sizeof(value), "%dx%d", tft_.width(), tft_.height());
   drawValue(6, value);
   const uint32_t refresh_us = micros() - started_us;
+  last_refresh_us_ = refresh_us;
   snprintf(value, sizeof(value), "%lu us", static_cast<unsigned long>(refresh_us));
   drawValue(7, value);
   Serial.printf("TFT dashboard: heap=%u B, PSRAM=%u/%u B, refresh=%lu us\n",

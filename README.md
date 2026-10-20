@@ -2,12 +2,13 @@
 
 Phase 1 ESP32 serial diagnostics passed on the user's hardware. The user reports
 that the earlier Phase 2 ST7796S dashboard worked on the physical display.
-The Nature Glass image showed severe corruption; a byte-order fix and optional
-image diagnostic have been built but still need an on-device check. The exact
+The Nature Glass image showed severe corruption; the user confirmed that the
+byte-order fix restored the photograph and cards on the physical display. The exact
 VCC and BL electrical requirements have not been documented in this repository.
 See [Phase 2 wiring and diagnostics](docs/phase2-tft.md).
 The TFT dashboard now has a photographic [Nature Glass design](docs/nature-glass.md),
 including source attribution, asset regeneration, and display validation steps.
+The TFT firmware also has a [Wi-Fi setup and recovery portal](docs/wifi-setup.md).
 A [320 × 480 background preview](assets/dashboard-preview.png) shows the photograph
 and card surfaces; text is drawn by the firmware.
 
@@ -43,8 +44,8 @@ press RST to repeat the boot report.
 
 ## Status and next gate
 
-The default, TFT, and optional TFT image diagnostic builds compile. The user
-reports that the previous diagnostics dashboard worked on hardware. The
-Nature Glass byte-order fix needs a physical retest; see
-[Nature Glass debugging](docs/nature-glass.md#on-device-image-diagnostic).
-Phase 3 Wi-Fi dashboard work has not started.
+The default and TFT environments compile. The user confirmed the Nature Glass
+background and cards on hardware before Wi-Fi was added. Wi-Fi provisioning,
+portal behavior, and the small status overlay require the physical checks in
+[Wi-Fi setup](docs/wifi-setup.md#physical-verification-checklist); successful
+builds do not establish hardware behavior.
