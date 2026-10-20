@@ -42,6 +42,7 @@
 #define TFT_WIDTH 320
 #define TFT_HEIGHT 480
 #define LOAD_GLCD 1
+#define LOAD_FONT2 1
 #define SPI_FREQUENCY 10000000
 #define USE_HSPI_PORT
 #endif

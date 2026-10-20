@@ -1,10 +1,15 @@
 # ESP32-S3 N16R8 TFT diagnostics
 
-Phase 1 ESP32 serial diagnostics passed on the user's hardware. Phase 2 ST7796S
-firmware is implemented and builds in both safe and TFT-enabled modes. The
-Estardyn display is **not connected**. Its VCC and BL electrical requirements
-are **NOT YET VERIFIED**, so no TFT power connection or upload is recommended.
+Phase 1 ESP32 serial diagnostics passed on the user's hardware. The user reports
+that the earlier Phase 2 ST7796S dashboard worked on the physical display.
+The Nature Glass image showed severe corruption; a byte-order fix and optional
+image diagnostic have been built but still need an on-device check. The exact
+VCC and BL electrical requirements have not been documented in this repository.
 See [Phase 2 wiring and diagnostics](docs/phase2-tft.md).
+The TFT dashboard now has a photographic [Nature Glass design](docs/nature-glass.md),
+including source attribution, asset regeneration, and display validation steps.
+A [320 × 480 background preview](assets/dashboard-preview.png) shows the photograph
+and card surfaces; text is drawn by the firmware.
 
 ## Project
 
@@ -14,9 +19,8 @@ for 16 MB flash and N16R8 octal PSRAM. The default environment is
 and uptime, and leaves TFT SPI and GPIOs untouched. The RGB LED remains disabled
 until its GPIO and LED type are confirmed.
 
-`esp32-s3-n16r8-tft` is an explicit hardware-enabled build. It uses TFT_eSPI
-2.5.43 with an ST7796S setup in `include/TftConfig.h`. It is for compilation
-and review until display power and backlight safety have been established.
+`esp32-s3-n16r8-tft` is the hardware-enabled build. It uses TFT_eSPI 2.5.43
+with the unchanged ST7796S setup in `include/TftConfig.h`.
 
 ## Build on Ubuntu
 
@@ -35,11 +39,12 @@ cache. A normal networked PlatformIO setup resolves `lib_deps` itself.
 For Serial port discovery, compare `pio device list` or
 `ls -l /dev/serial/by-id/` before and after connecting the ESP32-S3 native USB
 port with a data cable. Open the detected `/dev/ttyACM*` port at 115200 and
-press RST to repeat the boot report. No Phase 2 firmware has been uploaded.
+press RST to repeat the boot report.
 
 ## Status and next gate
 
-The default and TFT-enabled builds compile. TFT color tests and dashboard have
-not been observed on hardware. Resolve the display's VCC, logic-level and BL
-requirements before connecting it, then decide whether to flash the enabled
-build. Phase 3 Wi-Fi dashboard work has not started.
+The default, TFT, and optional TFT image diagnostic builds compile. The user
+reports that the previous diagnostics dashboard worked on hardware. The
+Nature Glass byte-order fix needs a physical retest; see
+[Nature Glass debugging](docs/nature-glass.md#on-device-image-diagnostic).
+Phase 3 Wi-Fi dashboard work has not started.

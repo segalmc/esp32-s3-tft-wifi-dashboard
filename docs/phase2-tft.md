@@ -1,7 +1,9 @@
 # Phase 2: ST7796S TFT preparation
 
-The display is **not connected**. This page describes the intended signals and
-firmware diagnostics; it does not authorize wiring or flashing. The measured
+This page records the original pre-connection signal plan and firmware
+diagnostics. The user now reports that the earlier diagnostics dashboard
+worked on the physical display; the final wiring and supply measurements have
+not been recorded here. The measured
 ESP32-S3 3V3 pin is 3.27 V and its 5V0 pin is approximately 1.34 V on USB.
 Neither measurement establishes a safe TFT supply.
 
@@ -65,9 +67,10 @@ Do not run an upload target until you explicitly decide to flash after the
 power and backlight requirements are confirmed. The enabled firmware sends
 ST7796 initialization commands, then shows red, green, blue, white, black,
 graphics, and a dashboard. Each test phase is logged over 115200-baud Serial.
-The dashboard updates changed value fields once per second and reports its
-value-drawing time in microseconds. Initial full-screen fills are intentional;
-the dashboard does not repeatedly clear the whole display.
+The [Nature Glass dashboard](nature-glass.md) updates changed value fields
+once per second and reports its update time in microseconds. Initial
+full-screen fills are intentional; the dashboard does not repeatedly clear
+the whole display.
 
 ## Troubleshooting after safe wiring is established
 
