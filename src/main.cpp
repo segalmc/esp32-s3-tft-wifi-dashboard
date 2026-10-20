@@ -52,6 +52,11 @@ void loop() {
                                 setup_password, network_manager.takeRevealRequest(), now_ms);
   display_manager.updateClock(wifi.clock_synced, now_ms);
   memset(setup_password, 0, sizeof(setup_password));
+  const bool ota_reveal = network_manager.takeOtaRevealRequest();
+  char ota_password[21] = {};
+  if (ota_reveal) network_manager.copyOtaPassword(ota_password, sizeof(ota_password));
+  display_manager.updateOta(network_manager.otaSnapshot(), ota_password, ota_reveal, now_ms);
+  memset(ota_password, 0, sizeof(ota_password));
 
   if (last_loop_ms) max_loop_gap_ms = max(max_loop_gap_ms, now_ms - last_loop_ms);
   last_loop_ms = now_ms;

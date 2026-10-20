@@ -305,7 +305,8 @@ void DisplayManager::drawClockPanel(const char* time_text, const char* weekday,
 
 void DisplayManager::updateClock(bool ntp_synced, uint32_t now_ms) {
   if (ntp_synced) clock_was_synced_ = true;
-  if (!dashboard_ready_ || !clock_was_synced_ || setup_panel_visible_) return;
+  if (!dashboard_ready_ || !clock_was_synced_ || setup_panel_visible_ ||
+      ota_panel_visible_) return;
   // Sample once a second; HH:mm only needs a redraw when the minute or date changes.
   if (!clock_dirty_ && static_cast<uint32_t>(now_ms - last_clock_sample_ms_) < 1000U) return;
   last_clock_sample_ms_ = now_ms;
@@ -357,7 +358,10 @@ void DisplayManager::updateNetwork(const char* status, bool ap_active,
   const bool visible = ap_active && reveal_until_ms_ &&
                        static_cast<int32_t>(now_ms - reveal_until_ms_) < 0;
   if (visible != setup_panel_visible_) {
-    if (!visible && clock_was_synced_) {
+    if (ota_panel_visible_) {
+      setup_panel_visible_ = visible;
+      clock_dirty_ = true;
+    } else if (!visible && clock_was_synced_) {
       // updateClock runs next in this loop and replaces the password directly.
       setup_panel_visible_ = false;
       clock_visible_ = false;
@@ -369,6 +373,96 @@ void DisplayManager::updateNetwork(const char* status, bool ap_active,
   if (!ap_active) {
     reveal_until_ms_ = 0;
     memset(setup_password_, 0, sizeof(setup_password_));
+  }
+}
+
+void DisplayManager::drawOtaPanel(NetworkManager::OtaPhase phase, uint8_t percent,
+                                  uint8_t error, bool show_password) {
+  restoreTopPanelRegion();
+  tft_.fillRoundRect(22, 91, 276, 58, 10, kNavy);
+  tft_.drawRoundRect(22, 91, 276, 58, 10, kTurquoise);
+  tft_.setTextFont(1);
+  tft_.setTextSize(1);
+  tft_.setTextColor(kTurquoise);
+  if (show_password) {
+    tft_.drawString("OTA PASSWORD / USB ONLY", 31, 99);
+    tft_.setTextFont(2);
+    if (tft_.textWidth(ota_password_, 2) > 250) tft_.setTextFont(1);
+    tft_.setTextColor(TFT_WHITE);
+    tft_.drawString(ota_password_, 31, 114);
+    tft_.setTextFont(1);
+    tft_.setTextColor(kOrange);
+    tft_.drawString("HIDES IN 60 SECONDS", 31, 138);
+  } else if (phase == NetworkManager::OtaPhase::Error) {
+    constexpr const char* errors[] = {"AUTH FAILED", "START FAILED", "CONNECT FAILED",
+                                      "RECEIVE FAILED", "IMAGE FAILED"};
+    tft_.drawString("OTA UPDATE ERROR", 31, 99);
+    tft_.setTextFont(2);
+    tft_.setTextColor(kOrange);
+    tft_.drawString(error < 5 ? errors[error] : "UNKNOWN ERROR", 31, 117);
+  } else if (phase == NetworkManager::OtaPhase::Success) {
+    tft_.drawString("OTA UPDATE", 31, 99);
+    tft_.setTextFont(2);
+    tft_.setTextColor(TFT_WHITE);
+    tft_.drawString("COMPLETE / REBOOTING", 31, 117);
+  } else {
+    char label[24];
+    snprintf(label, sizeof(label), "OTA UPDATE / %u%%", static_cast<unsigned>(percent));
+    tft_.drawString(label, 31, 99);
+    tft_.drawRoundRect(31, 123, 258, 14, 4, kTurquoise);
+    tft_.fillRect(34, 126, percent * 252 / 100, 8, kTurquoise);
+  }
+  clock_visible_ = false;
+  clock_dirty_ = true;
+}
+
+void DisplayManager::updateOta(NetworkManager::OtaSnapshot ota, const char* password,
+                               bool reveal, uint32_t now_ms) {
+  if (reveal && password && password[0]) {
+    memcpy(ota_password_, password, sizeof(ota_password_));
+    ota_reveal_until_ms_ = now_ms + 60000U;
+  }
+  if (ota.phase == NetworkManager::OtaPhase::Error &&
+      ota.event != ota_last_error_event_) {
+    ota_error_until_ms_ = now_ms + 10000U;
+    ota_last_error_event_ = ota.event;
+  }
+  if (!dashboard_ready_) return;
+
+  const bool show_error = ota.phase == NetworkManager::OtaPhase::Error &&
+                          static_cast<int32_t>(now_ms - ota_error_until_ms_) < 0;
+  const bool show_progress = ota.phase == NetworkManager::OtaPhase::Uploading ||
+                             ota.phase == NetworkManager::OtaPhase::Success;
+  const bool show_password = !show_error && !show_progress &&
+                             ota_reveal_until_ms_ &&
+                             static_cast<int32_t>(now_ms - ota_reveal_until_ms_) < 0;
+  if (show_error || show_progress) {
+    memset(ota_password_, 0, sizeof(ota_password_));
+    ota_reveal_until_ms_ = 0;
+  }
+  const bool visible = show_error || show_progress || show_password;
+  if (!visible) {
+    if (ota_panel_visible_) {
+      ota_panel_visible_ = false;
+      memset(ota_password_, 0, sizeof(ota_password_));
+      ota_reveal_until_ms_ = 0;
+      if (setup_panel_visible_) drawSetupPanel(true);
+      else restoreTopPanelRegion();
+      clock_dirty_ = true;
+    }
+    return;
+  }
+
+  const uint8_t stepped_percent = (ota.percent / 5) * 5;
+  if (!ota_panel_visible_ || ota_secret_visible_ != show_password ||
+      ota_drawn_phase_ != ota.phase || ota_drawn_error_ != ota.error ||
+      (!show_password && show_progress && stepped_percent != ota_drawn_percent_)) {
+    drawOtaPanel(ota.phase, stepped_percent, ota.error, show_password);
+    ota_panel_visible_ = true;
+    ota_secret_visible_ = show_password;
+    ota_drawn_phase_ = ota.phase;
+    ota_drawn_percent_ = stepped_percent;
+    ota_drawn_error_ = ota.error;
   }
 }
 

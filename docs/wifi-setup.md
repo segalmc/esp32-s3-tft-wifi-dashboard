@@ -26,9 +26,10 @@ The AP password disappears from the display after 60 seconds. To reveal it
 again, connect the native USB serial port at 115200 baud and send `wifi show`
 followed by a newline while the AP is active. It appears on the TFT for another
 60 seconds, never in Serial output. Send `wifi setup` to open the protected AP
-if it is currently closed. `wifi status` prints state and memory readings but
-no credentials. Setup started over USB while already online closes after ten
-minutes if unused; first-boot and offline recovery setup remain available.
+if it is currently closed. `wifi status` prints state, station IP, connected
+SSID, RSSI, and memory readings, but no passwords. It prints `IP=none` when
+the station has no address. Setup started over USB while already online closes
+after ten minutes if unused; first-boot and offline recovery setup remain available.
 
 ## Reconnection and recovery
 

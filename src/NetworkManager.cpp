@@ -1,5 +1,6 @@
 #include "NetworkManager.h"
 #include "NetworkPolicy.h"
+#include "OtaPolicy.h"
 
 #if TFT_HARDWARE_ENABLED
 #include <esp_system.h>
@@ -61,6 +62,34 @@ NetworkManager::Snapshot NetworkManager::snapshot() const {
   return result;
 }
 
+NetworkManager::OtaSnapshot NetworkManager::otaSnapshot() const {
+  portENTER_CRITICAL(&snapshot_lock_);
+  const OtaSnapshot result = ota_snapshot_;
+  portEXIT_CRITICAL(&snapshot_lock_);
+  return result;
+}
+
+void NetworkManager::setOtaStatus(OtaPhase phase, uint8_t percent, uint8_t error) {
+  portENTER_CRITICAL(&snapshot_lock_);
+  ota_snapshot_ = {phase, percent, error, ota_snapshot_.event + 1};
+  portEXIT_CRITICAL(&snapshot_lock_);
+}
+
+bool NetworkManager::copyOtaPassword(char* output, size_t size) const {
+  if (!output || size < sizeof(ota_password_)) return false;
+  portENTER_CRITICAL(&snapshot_lock_);
+  const bool available = ota_password_ready_;
+  if (available) memcpy(output, ota_password_, sizeof(ota_password_));
+  portEXIT_CRITICAL(&snapshot_lock_);
+  return available;
+}
+
+bool NetworkManager::takeOtaRevealRequest() {
+  const bool result = ota_reveal_requested_;
+  ota_reveal_requested_ = false;
+  return result;
+}
+
 bool NetworkManager::copySetupPassword(char* output, size_t size) const {
   if (!output || size < sizeof(ap_password_)) return false;
   portENTER_CRITICAL(&snapshot_lock_);
@@ -96,6 +125,33 @@ bool NetworkManager::loadStorage() {
   secret.toCharArray(ap_password_, sizeof(ap_password_));
   portEXIT_CRITICAL(&snapshot_lock_);
   secret = "";
+  // A separate NVS key leaves the AP password and saved home credentials intact.
+  // A damaged existing key disables OTA instead of silently rotating its secret.
+  bool ota_password_valid = false;
+  if (preferences_.isKey("otakey")) {
+    if (preferences_.getBytesLength("otakey") == sizeof(ota_password_) &&
+        preferences_.getBytes("otakey", ota_password_, sizeof(ota_password_)) ==
+            sizeof(ota_password_) && ota_password_[20] == '\0') {
+      ota_password_valid = true;
+      for (uint8_t i = 0; i < 20; ++i) {
+        if (!strchr(kAlphabet, ota_password_[i])) ota_password_valid = false;
+      }
+    }
+  } else {
+    for (uint8_t i = 0; i < 20; ++i) {
+      ota_password_[i] = kAlphabet[esp_random() % (sizeof(kAlphabet) - 1)];
+    }
+    ota_password_[20] = '\0';
+    ota_password_valid = preferences_.putBytes("otakey", ota_password_,
+                                              sizeof(ota_password_)) == sizeof(ota_password_);
+  }
+  if (!ota_password_valid) {
+    memset(ota_password_, 0, sizeof(ota_password_));
+    Serial.println("OTA: password unavailable; OTA disabled");
+  }
+  portENTER_CRITICAL(&snapshot_lock_);
+  ota_password_ready_ = ota_password_valid;
+  portEXIT_CRITICAL(&snapshot_lock_);
   if (preferences_.getBytesLength("home") == sizeof(saved_)) {
     preferences_.getBytes("home", &saved_, sizeof(saved_));
     has_saved_ = validCredentials(saved_);
@@ -123,6 +179,7 @@ void NetworkManager::run() {
     const uint32_t now = millis();
     processCommands();
     tick(now);
+    serviceOta();
     if (snapshot().ap_active) {
       dns_.processNextRequest();
       const uint32_t started_us = micros();
@@ -145,6 +202,7 @@ void NetworkManager::run() {
 }
 
 void NetworkManager::startConnection(uint32_t now) {
+  stopOta();
   WiFi.mode(snapshot().ap_active ? WIFI_AP_STA : WIFI_STA);
   WiFi.begin(saved_.ssid, saved_.password);
   attempt_started_ms_ = now;
@@ -154,6 +212,7 @@ void NetworkManager::startConnection(uint32_t now) {
 
 void NetworkManager::startPortal() {
   if (snapshot().ap_active) return;
+  stopOta();  // ArduinoOTA's UDP listener otherwise accepts AP clients too.
   WiFi.mode(WIFI_AP_STA);
   if (!WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                          IPAddress(255, 255, 255, 0)) ||
@@ -193,6 +252,7 @@ void NetworkManager::stopPortal() {
 }
 
 void NetworkManager::scheduleRetry(uint32_t now) {
+  stopOta();
   WiFi.disconnect(false, false);
   portENTER_CRITICAL(&snapshot_lock_);
   snapshot_.clock_synced = false;
@@ -304,11 +364,36 @@ void NetworkManager::processSerial() {
         if (commands_) xQueueSend(commands_, &command, 0);
       } else if (strcmp(serial_line_, "wifi show") == 0) {
         reveal_requested_ = true;
+      } else if (strcmp(serial_line_, "ota show") == 0) {
+        ota_reveal_requested_ = true;
       } else if (strcmp(serial_line_, "wifi status") == 0) {
         const Snapshot current = snapshot();
-        Serial.printf("Wi-Fi: state=%u AP=%s clock=%s heap=%u PSRAM=%u\n",
+        const bool associated = WiFi.status() == WL_CONNECTED;
+        const IPAddress address = associated ? WiFi.localIP() : IPAddress(0, 0, 0, 0);
+        char ip[16] = "none";
+        if (address != IPAddress(0, 0, 0, 0)) {
+          snprintf(ip, sizeof(ip), "%u.%u.%u.%u", address[0], address[1],
+                   address[2], address[3]);
+        }
+        char ssid[33] = "none";
+        char rssi_text[16] = "none";
+        if (associated) {
+          const String connected_ssid = WiFi.SSID();
+          if (connected_ssid.length()) {
+            const size_t length = min(connected_ssid.length(), sizeof(ssid) - 1);
+            for (size_t i = 0; i < length; ++i) {
+              const unsigned char ch = static_cast<unsigned char>(connected_ssid[i]);
+              ssid[i] = ch >= 0x20 && ch <= 0x7e ? ch : '?';
+            }
+            ssid[length] = '\0';
+          }
+          const int32_t rssi = WiFi.RSSI();
+          if (rssi != 0) snprintf(rssi_text, sizeof(rssi_text), "%ld dBm", static_cast<long>(rssi));
+        }
+        Serial.printf("Wi-Fi: state=%u AP=%s clock=%s IP=%s SSID=%s RSSI=%s heap=%u PSRAM=%u\n",
                       static_cast<unsigned>(current.state), current.ap_active ? "on" : "off",
-                      current.clock_synced ? "synced" : "pending", ESP.getFreeHeap(), ESP.getFreePsram());
+                      current.clock_synced ? "synced" : "pending", ip, ssid, rssi_text,
+                      ESP.getFreeHeap(), ESP.getFreePsram());
       }
       serial_length_ = 0;
     } else if (serial_length_ < sizeof(serial_line_) - 1) {
@@ -320,6 +405,51 @@ void NetworkManager::processSerial() {
 }
 
 void NetworkManager::update() { processSerial(); }
+
+void NetworkManager::stopOta() {
+  if (!ota_started_) return;
+  ArduinoOTA.end();
+  ota_started_ = false;
+  if (otaSnapshot().phase == OtaPhase::Uploading) {
+    setOtaStatus(OtaPhase::Error, 0, static_cast<uint8_t>(OTA_RECEIVE_ERROR));
+  }
+  Serial.println("OTA: service stopped");
+}
+
+void NetworkManager::serviceOta() {
+  const Snapshot current = snapshot();
+  const bool linked = WiFi.status() == WL_CONNECTED &&
+                      WiFi.localIP() != IPAddress(0, 0, 0, 0);
+  if (!ota_policy::mayServe(current.state == State::Online, current.ap_active,
+                            linked, ota_password_ready_)) {
+    stopOta();
+    return;
+  }
+  if (!ota_started_) {
+    // Keep ArduinoOTA's MAC-derived hostname unique across multiple displays.
+    ArduinoOTA.setPassword(ota_password_);
+    ArduinoOTA.onStart([this]() {
+      setOtaStatus(OtaPhase::Uploading, 0, 0);
+      Serial.println("OTA: upload started");
+    });
+    ArduinoOTA.onProgress([this](unsigned int received, unsigned int total) {
+      const uint8_t percent = total ? static_cast<uint8_t>(min(100U, received * 100U / total)) : 0;
+      setOtaStatus(OtaPhase::Uploading, percent, 0);
+    });
+    ArduinoOTA.onEnd([this]() {
+      setOtaStatus(OtaPhase::Success, 100, 0);
+      Serial.println("OTA: upload complete; rebooting");
+    });
+    ArduinoOTA.onError([this](ota_error_t error) {
+      setOtaStatus(OtaPhase::Error, 0, static_cast<uint8_t>(error));
+      Serial.printf("OTA: error code %u\n", static_cast<unsigned>(error));
+    });
+    ArduinoOTA.begin();
+    ota_started_ = true;
+    Serial.println("OTA: service requested on Wi-Fi STA");
+  }
+  ArduinoOTA.handle();
+}
 
 bool NetworkManager::apRequest() {
   if (snapshot().ap_active && server_.client().localIP() == WiFi.softAPIP()) return true;

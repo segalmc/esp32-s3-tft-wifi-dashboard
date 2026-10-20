@@ -4,6 +4,7 @@
 
 #if TFT_HARDWARE_ENABLED
 #include <Arduino.h>
+#include <ArduinoOTA.h>
 #include <DNSServer.h>
 #include <Preferences.h>
 #include <WebServer.h>
@@ -18,12 +19,22 @@ class NetworkManager {
     bool clock_synced;
     bool initial_setup;
   };
+  enum class OtaPhase : uint8_t { Idle, Uploading, Success, Error };
+  struct OtaSnapshot {
+    OtaPhase phase;
+    uint8_t percent;
+    uint8_t error;
+    uint32_t event;
+  };
 
   void begin();
   void update();  // USB commands only; Wi-Fi and HTTP run in the network task.
   Snapshot snapshot() const;
   bool copySetupPassword(char* output, size_t size) const;
   bool takeRevealRequest();
+  OtaSnapshot otaSnapshot() const;
+  bool copyOtaPassword(char* output, size_t size) const;
+  bool takeOtaRevealRequest();
 
  private:
   struct Credentials {
@@ -53,10 +64,18 @@ class NetworkManager {
   void startClock();
   void checkClock(uint32_t now);
   void clearPending();
+  void serviceOta();
+  void stopOta();
+  void setOtaStatus(OtaPhase phase, uint8_t percent, uint8_t error);
 
   mutable portMUX_TYPE snapshot_lock_ = portMUX_INITIALIZER_UNLOCKED;
   Snapshot snapshot_{State::Error, false, false, false};
+  OtaSnapshot ota_snapshot_{OtaPhase::Idle, 0, 0, 0};
   char ap_password_[17] = {};
+  char ota_password_[21] = {};
+  bool ota_password_ready_ = false;
+  bool ota_started_ = false;
+  bool ota_reveal_requested_ = false;
   Credentials saved_{};
   bool has_saved_ = false;
   Credentials pending_{};
