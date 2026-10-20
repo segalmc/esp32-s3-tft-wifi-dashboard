@@ -1,0 +1,19 @@
+#include <Arduino.h>
+
+#include "SystemMonitor.h"
+
+#ifndef CONFIG_IDF_TARGET_ESP32S3
+#error "This firmware requires an ESP32-S3 target"
+#endif
+
+SystemMonitor monitor;
+
+void setup() {
+  Serial.begin(115200);
+  monitor.begin();
+}
+
+void loop() {
+  monitor.update(millis());
+}
+
