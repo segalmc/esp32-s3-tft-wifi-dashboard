@@ -269,6 +269,8 @@ void NetworkManager::processCommands() {
       portal_manual_ = true;
       startPortal();
       if (!has_saved_) setState(State::Setup);
+    } else if (command == Command::RotateOta) {
+      rotateOtaPassword();
     }
   }
 }
@@ -366,6 +368,11 @@ void NetworkManager::processSerial() {
         reveal_requested_ = true;
       } else if (strcmp(serial_line_, "ota show") == 0) {
         ota_reveal_requested_ = true;
+      } else if (strcmp(serial_line_, "ota rotate") == 0) {
+        const Command command = Command::RotateOta;
+        if (!commands_ || xQueueSend(commands_, &command, 0) != pdTRUE) {
+          Serial.println("OTA: rotation request busy; retry over USB");
+        }
       } else if (strcmp(serial_line_, "wifi status") == 0) {
         const Snapshot current = snapshot();
         const bool associated = WiFi.status() == WL_CONNECTED;
@@ -405,6 +412,29 @@ void NetworkManager::processSerial() {
 }
 
 void NetworkManager::update() { processSerial(); }
+
+void NetworkManager::rotateOtaPassword() {
+  char replacement[sizeof(ota_password_)] = {};
+  for (uint8_t i = 0; i < sizeof(replacement) - 1; ++i) {
+    replacement[i] = kAlphabet[esp_random() % (sizeof(kAlphabet) - 1)];
+  }
+  stopOta();
+  const bool stored = preferences_.putBytes("otakey", replacement, sizeof(replacement)) ==
+                      sizeof(replacement);
+  memset(replacement, 0, sizeof(replacement));
+  if (!stored) {
+    Serial.println("OTA: rotation failed; previous password retained");
+    return;  // The old secret still works when serviceOta restarts.
+  }
+  // ArduinoOTA caches the password digest; reboot to activate the new key.
+  // Disable service first so a delayed restart cannot expose the old digest.
+  portENTER_CRITICAL(&snapshot_lock_);
+  ota_password_ready_ = false;
+  memset(ota_password_, 0, sizeof(ota_password_));
+  portEXIT_CRITICAL(&snapshot_lock_);
+  Serial.println("OTA: password rotated; restarting to activate it");
+  ESP.restart();
+}
 
 void NetworkManager::stopOta() {
   if (!ota_started_) return;

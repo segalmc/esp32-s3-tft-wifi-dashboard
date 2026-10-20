@@ -42,7 +42,7 @@ class NetworkManager {
     char ssid[33];
     char password[65];
   };
-  enum class Command : uint8_t { Setup };
+  enum class Command : uint8_t { Setup, RotateOta };
   static void taskEntry(void* context);
   void run();
   void startConnection(uint32_t now);
@@ -67,6 +67,7 @@ class NetworkManager {
   void serviceOta();
   void stopOta();
   void setOtaStatus(OtaPhase phase, uint8_t percent, uint8_t error);
+  void rotateOtaPassword();
 
   mutable portMUX_TYPE snapshot_lock_ = portMUX_INITIALIZER_UNLOCKED;
   Snapshot snapshot_{State::Error, false, false, false};

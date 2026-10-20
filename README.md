@@ -17,10 +17,10 @@ and card surfaces; text is drawn by the firmware.
 ## Project
 
 `platformio.ini` retains the generic `esp32-s3-devkitc-1` board with overrides
-for 16 MB flash and N16R8 octal PSRAM. The default environment is
-`esp32-s3-n16r8`; it keeps Serial at 115200, reports chip, flash, PSRAM, heap,
-and uptime, and leaves TFT SPI and GPIOs untouched. The RGB LED remains disabled
-until its GPIO and LED type are confirmed.
+for 16 MB flash and N16R8 octal PSRAM. The default environment is the
+authenticated `esp32-s3-n16r8-tft-ota` target so VS Code's Upload button uses
+Wi-Fi. The serial-only `esp32-s3-n16r8` and USB TFT upload environments remain
+available. The RGB LED remains disabled until its GPIO and LED type are confirmed.
 
 `esp32-s3-n16r8-tft` is the hardware-enabled build. It uses TFT_eSPI 2.5.43
 with the unchanged ST7796S setup in `include/TftConfig.h`.
@@ -32,6 +32,7 @@ Open this folder in VS Code with PlatformIO, or run:
 ```sh
 ~/.platformio/penv/bin/pio run
 ~/.platformio/penv/bin/pio run -e esp32-s3-n16r8-tft
+~/.platformio/penv/bin/pio run -e esp32-s3-n16r8
 ```
 
 The TFT library is fetched only for the enabled environment. On this machine,

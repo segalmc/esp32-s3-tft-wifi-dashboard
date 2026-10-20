@@ -60,28 +60,65 @@ TFT** for 60 seconds, even if Wi-Fi is offline. Retain it in a password manager.
 The command and Serial logs never print the password. If NVS cannot save the
 password, OTA stays disabled while ordinary Wi-Fi continues working.
 
-## Wireless upload
+## Prepare private uploader credentials
 
-Use a trusted computer on the same local network as the device. The OTA
-service starts only after Wi-Fi association and DHCP, and stops if the setup
-AP opens or Wi-Fi disconnects. In Bash, enter the device IP and password
-without a literal password in shell history:
+After `ota show` displays the device password, enter it twice into the helper:
 
 ```sh
-read -rp 'Device IP: ' natureglass_ip
-read -rsp 'OTA password: ' natureglass_ota_password; echo
-PLATFORMIO_UPLOAD_FLAGS="--auth=$natureglass_ota_password" "$HOME/.platformio/penv/bin/pio" run -e esp32-s3-n16r8-tft-ota -t upload --upload-port "$natureglass_ip"
-unset natureglass_ota_password
+python3 tools/set_ota_password.py
 ```
 
-`192.0.2.1` in `platformio.ini` is a reserved documentation address so a plain
-build does not require a real device IP. Always override it at upload time.
-The uploader passes the password as a process argument; other users on the
-upload computer may see it. Do not run with shell tracing (`set -x`) or verbose
-upload logs. ArduinoOTA uses MD5 challenge authentication and an image digest;
-it does **not** encrypt transport or sign firmware. Restrict OTA to a trusted
-LAN and keep the password private. Ordinary NVS is readable with physical
-flash access.
+It writes `~/.config/nature-glass/ota-password` atomically, with file mode
+`0600` inside a `0700` directory. The password is not echoed, logged, put in
+an environment variable, or passed as a process argument. Keep this file out
+of Git and any shared backup. Uploads fail closed if the file is absent,
+malformed, symlinked, owned by another user, or has looser permissions.
+
+## Wireless upload from VS Code or terminal
+
+The default PlatformIO environment is now `esp32-s3-n16r8-tft-ota`. With the
+device online at `192.168.31.230`, use VS Code's PlatformIO **Upload** button
+or run:
+
+```sh
+"$HOME/.platformio/penv/bin/pio" run -t upload
+```
+
+No password prompt is needed after the file is prepared. Set
+`NATURE_GLASS_OTA_IP` in the VS Code process environment for a persistent local
+IPv4 override, or use `--upload-port` for one terminal upload:
+
+```sh
+"$HOME/.platformio/penv/bin/pio" run -e esp32-s3-n16r8-tft-ota -t upload --upload-port 192.168.31.231
+```
+
+The local environment variable takes precedence if both are set. The
+PlatformIO post script replaces the normal ESPOTA command with an uploader
+that reads the secret file within its own process; even verbose build output
+shows only script, IP, and firmware paths. Do not use the old
+`PLATFORMIO_UPLOAD_FLAGS=--auth=...` approach. The service starts only after
+Wi-Fi association and DHCP, and stops if the setup AP opens or Wi-Fi
+disconnects.
+
+ArduinoOTA uses MD5 challenge authentication and an image digest; it does
+**not** encrypt transport or sign firmware. Restrict OTA to a trusted LAN.
+Ordinary device NVS is readable with physical flash access.
+
+## Rotate an exposed OTA password
+
+If the old password was exposed, install this firmware over USB using the
+checked and backed-up procedure above rather than reusing that password for
+another wireless upload. With this firmware installed, connect the native USB
+Serial port at 115200 baud and send `ota rotate` followed by a newline. The
+device disables OTA, replaces only its `otakey` NVS entry, and reboots to
+activate the new digest.
+It does not print either password. If NVS rejects the write, the device reports
+failure and retains the previous password. After reboot, send `ota show` over
+USB, read the new password on the TFT, and run
+`python3 tools/set_ota_password.py` again to atomically replace the local
+file. Uploads using the old file fail until it is updated. The old secret may
+still exist in historical, unencrypted NVS flash pages; physical flash
+security requires separate hardware provisioning.
 
 The top photo panel shows progress in 5% steps; errors remain for ten seconds,
 then the clock or setup panel returns. The eight cards keep their normal
@@ -97,6 +134,8 @@ two slots do not imply automatic rollback is enabled.
 - [ ] First USB installation reconnects with the previously saved Wi-Fi credentials.
 - [ ] Six startup tests, the photograph, clock, Wi-Fi badge, and all eight cards remain correct.
 - [ ] `ota show` reveals the unique secret on the TFT for 60 seconds and never in Serial.
+- [ ] The local secret file is mode `0600`; VS Code Upload works without a prompt or secret in verbose logs.
+- [ ] `ota rotate` reboots; the old file is rejected, and entering the new TFT secret restores upload.
 - [ ] A wrong OTA password is rejected; an error appears without changing firmware.
 - [ ] The OTA service is unreachable while the setup AP is active or STA is offline.
 - [ ] An interrupted upload leaves the old firmware bootable; USB recovery remains available.
