@@ -2,12 +2,10 @@
 #if TFT_HARDWARE_ENABLED
 #include "BoilerPolicy.h"
 #include "BoilerDps.h"
-#include "LynkTuya.h"
 #include "secrets.h"
 #include <time.h>
 
 namespace {
-constexpr uint32_t kRetryMs = 15000;
 IPAddress targetIp() {
   IPAddress result;
   result.fromString(TUYA_DEVICE_IP);
@@ -110,11 +108,10 @@ void TuyaControl::setProgress(Progress progress, const char* result) {
 }
 
 bool TuyaControl::persistLease(int64_t now) {
-  boiler_policy::Lease lease{boiler_policy::kLeaseVersion,
-                              now + boiler_policy::kMaxOnSeconds, now};
+  const auto lease = boiler_policy::makeLease(now);
   if (!storage_ready_ || !boiler_policy::saveLease(preferences_, lease)) return false;
   lease_valid_ = true;
-  lease_deadline_ = lease.deadline;
+  lease_ = lease;
   lease_started_ms_ = millis();
   portENTER_CRITICAL(&lock_);
   state_.lease_active = true;
@@ -123,9 +120,9 @@ bool TuyaControl::persistLease(int64_t now) {
 }
 
 void TuyaControl::clearLease() {
-  if (lease_valid_ && !preferences_.remove("lease")) return;
+  if (lease_valid_ && !preferences_.remove(boiler_config::kLeaseKey)) return;
   lease_valid_ = false;
-  lease_deadline_ = 0;
+  lease_ = {};
   lease_started_ms_ = 0;
   portENTER_CRITICAL(&lock_);
   state_.lease_active = false;
@@ -133,59 +130,74 @@ void TuyaControl::clearLease() {
 }
 
 void TuyaControl::recordProtocol(bool valid, const char* failure) {
-  const auto error = device_->lastError();
-  const char* response_type = LynkTuyaDevice<TUYA_V34>::responseTypeName(device_->lastResponseType());
+  const auto diagnostics = client_->diagnostics();
+  const auto error = diagnostics.lastError;
+  const char* response_type = TuyaLocalClient::responseTypeName(diagnostics.lastResponseType);
   portENTER_CRITICAL(&lock_);
-  state_.last_response_command = device_->lastResponseCommand();
-  state_.last_frame_length = static_cast<uint16_t>(device_->lastFrameLength());
+  state_.last_response_command = diagnostics.lastCommand;
+  state_.last_frame_length = diagnostics.lastFrameLength;
   snprintf(state_.last_response_type, sizeof(state_.last_response_type), "%s", response_type);
   snprintf(state_.last_failure, sizeof(state_.last_failure), "%s", valid ? "none" : failure);
   if (!valid) {
     ++state_.failures;
-    if (error == LynkTuyaDevice<TUYA_V34>::Error::Connect ||
-        error == LynkTuyaDevice<TUYA_V34>::Error::Timeout ||
-        error == LynkTuyaDevice<TUYA_V34>::Error::IncompleteFrame)
+    if (error == TuyaLocalClient::Error::Connect ||
+        error == TuyaLocalClient::Error::Timeout ||
+        error == TuyaLocalClient::Error::IncompleteFrame)
       ++state_.connection_failures;
-    else if (error == LynkTuyaDevice<TUYA_V34>::Error::Authentication)
+    else if (error == TuyaLocalClient::Error::Authentication)
       ++state_.authentication_failures;
     else ++state_.auth_or_parse_failures;
   }
   portEXIT_CRITICAL(&lock_);
   Serial.printf("Tuya protocol: cmd=0x%02lX frame_len=%u response=%s failure=%s\n",
-                static_cast<unsigned long>(device_->lastResponseCommand()),
-                static_cast<unsigned>(device_->lastFrameLength()), response_type,
+                static_cast<unsigned long>(diagnostics.lastCommand),
+                static_cast<unsigned>(diagnostics.lastFrameLength), response_type,
                 valid ? "none" : failure);
 }
 
 void TuyaControl::sessionFailure(const char*) {
-  device_->closeConnection();
-  if (reconnect_failures_ < 6) ++reconnect_failures_;
-  next_reconnect_ms_ = millis() + boiler_policy::reconnectDelayMs(reconnect_failures_ - 1);
+  client_->invalidate();
   portENTER_CRITICAL(&lock_);
   state_.connected = false;
   portEXIT_CRITICAL(&lock_);
 }
 
 bool TuyaControl::connectSession() {
-  if (device_->sessionReady()) return true;
+  if (client_->connected()) return true;
   if (!online()) return false;
-  device_->closeConnection();
-  if (!device_->connectToPlug() || !device_->handshake()) {
-    recordProtocol(false, LynkTuyaDevice<TUYA_V34>::errorName(device_->lastError()));
-    sessionFailure("connect or handshake");
+  if (!client_->connect()) {
+    recordProtocol(false, TuyaLocalClient::errorName(client_->diagnostics().lastError));
     return false;
   }
-  reconnect_failures_ = 0;
-  next_heartbeat_ms_ = millis() + boiler_policy::kHeartbeatMs;
-  next_reconcile_ms_ = millis();
   portENTER_CRITICAL(&lock_);
-  ++state_.reconnects;
+  state_.reconnects = client_->diagnostics().sessions;
   portEXIT_CRITICAL(&lock_);
   return true;
 }
 
 void TuyaControl::pushEntry(void* context, const String& json) {
   static_cast<TuyaControl*>(context)->applyPush(json);
+}
+
+void TuyaControl::statusEntry(void* context, const String& json) {
+  static_cast<TuyaControl*>(context)->applyStatus(json);
+}
+
+void TuyaControl::applyStatus(const String& json) {
+  bool on = false;
+  boiler_dps::ParseError parse_error = boiler_dps::ParseError::None;
+  if (!boiler_dps::parseRelay(json.c_str(), on, &parse_error)) {
+    recordProtocol(false, parse_error == boiler_dps::ParseError::Json ?
+                         "json-parsing" : "missing-or-invalid-dps1");
+    sessionFailure("invalid DPS status");
+    return;
+  }
+  portENTER_CRITICAL(&lock_);
+  state_.relay = on ? Relay::On : Relay::Off;
+  state_.connected = true;
+  state_.last_confirmed_ms = millis();
+  portEXIT_CRITICAL(&lock_);
+  recordProtocol(true, "none");
 }
 
 void TuyaControl::applyPush(const String& json) {
@@ -207,14 +219,14 @@ void TuyaControl::applyPush(const String& json) {
 bool TuyaControl::readStatus() {
   if (!connectSession()) return false;
   String json;
-  const bool received = device_->getStatus(json, false);
+  const bool received = client_->readStatus(json);
   bool on = false;
   boiler_dps::ParseError parse_error = boiler_dps::ParseError::None;
   const bool valid = received && boiler_dps::parseRelay(json.c_str(), on, &parse_error);
   const char* failure = received ?
       (parse_error == boiler_dps::ParseError::Json ? "json-parsing" :
        parse_error == boiler_dps::ParseError::MissingOrInvalidDps1 ? "missing-or-invalid-dps1" : "none") :
-      LynkTuyaDevice<TUYA_V34>::errorName(device_->lastError());
+      TuyaLocalClient::errorName(client_->diagnostics().lastError);
   json = "";
   portENTER_CRITICAL(&lock_);
   state_.connected = valid;
@@ -225,7 +237,6 @@ bool TuyaControl::readStatus() {
   portEXIT_CRITICAL(&lock_);
   recordProtocol(valid, failure);
   if (!valid) sessionFailure(failure);
-  else next_reconcile_ms_ = millis() + boiler_policy::kReconcileMs;
   return valid;
 }
 
@@ -238,7 +249,6 @@ void TuyaControl::execute(Request request) {
     state_.monitor_armed = true;
     state_.reads_enabled = true;
     portEXIT_CRITICAL(&lock_);
-    next_reconnect_ms_ = millis();
     setProgress(Progress::Confirmed, "monitor armed for future boots");
     return;
   }
@@ -246,7 +256,7 @@ void TuyaControl::execute(Request request) {
     const bool removed = storage_ready_ && boiler_policy::disarmMonitor(preferences_);
     if (!removed) { setProgress(Progress::Failed, "monitor authorization not removed"); return; }
     monitor_armed_ = false;
-    device_->closeConnection();
+    client_->disconnect();
     portENTER_CRITICAL(&lock_);
     state_.monitor_armed = false;
     state_.reads_enabled = false;
@@ -257,7 +267,7 @@ void TuyaControl::execute(Request request) {
     return;
   }
   if (request == Request::Status || request == Request::Reconnect) {
-    if (request == Request::Reconnect) device_->closeConnection();
+    if (request == Request::Reconnect) client_->disconnect();
     setProgress(Progress::Verifying, "reading authenticated state");
     if (readStatus()) setProgress(Progress::Confirmed, "state confirmed");
     else setProgress(Progress::Failed, "status unavailable or invalid");
@@ -283,12 +293,11 @@ void TuyaControl::execute(Request request) {
   }
   setProgress(Progress::Sending, target_on ? "sending ON once" : "sending OFF");
   const bool ack = connectSession() &&
-      (target_on ? device_->turnOn(static_cast<uint32_t>(now), false, "1")
-                 : device_->turnOff(static_cast<uint32_t>(now), false, "1"));
+      client_->setBooleanDps("1", target_on, static_cast<uint32_t>(now));
   // An ACK cannot establish relay state. Even an absent ACK may follow an applied command.
   setProgress(Progress::Verifying, "verifying authenticated relay state");
   bool matched = false;
-  for (uint8_t attempt = 0; attempt < 3; ++attempt) {
+  for (uint8_t attempt = 0; attempt < boiler_config::kActive.verificationReadAttempts; ++attempt) {
     if (readStatus()) {
       const auto state = snapshot();
       if (boiler_policy::verified(target_on, true, state.relay == Relay::On)) {
@@ -296,7 +305,8 @@ void TuyaControl::execute(Request request) {
         break;
       }
     }
-    if (attempt < 2) vTaskDelay(pdMS_TO_TICKS(800));
+    if (attempt + 1 < boiler_config::kActive.verificationReadAttempts)
+      vTaskDelay(pdMS_TO_TICKS(boiler_config::kActive.verificationReadDelayMs));
   }
   if (matched) {
     if (!target_on) clearLease();
@@ -307,12 +317,27 @@ void TuyaControl::execute(Request request) {
 }
 
 void TuyaControl::run() {
-  LynkTuyaDevice<TUYA_V34> device(targetIp(), TUYA_LOCAL_KEY);
-  device.setDeviceId(TUYA_DEVICE_ID);
-  device.setTimeout(3000);
-  device.onDpsUpdate(pushEntry, this);
-  device_ = &device;
-  storage_ready_ = preferences_.begin("boiler", false);
+  TuyaLocalClient client;
+  TuyaLocalConfig config;
+  config.host = targetIp();
+  config.deviceId = TUYA_DEVICE_ID;
+  config.localKey = TUYA_LOCAL_KEY;
+  config.commandResponseTimeoutMs = 3000;
+  config.heartbeatIntervalMs = boiler_policy::kHeartbeatMs;
+  config.statusReconciliationMs = boiler_policy::kReconcileMs;
+  config.dps.stateBoolean = 1;
+  config.dps.controlBoolean = 1;
+  TuyaLocalClient::Callbacks callbacks;
+  callbacks.onStatus = statusEntry;
+  callbacks.onPush = pushEntry;
+  callbacks.context = this;
+  const bool client_ready = client.begin(config, callbacks);
+  client_ = &client;
+  portENTER_CRITICAL(&lock_);
+  state_.reconcile_interval_ms = config.statusReconciliationMs;
+  portEXIT_CRITICAL(&lock_);
+  if (!client_ready) Serial.println("Tuya: client configuration unavailable");
+  storage_ready_ = preferences_.begin(boiler_config::kNvsNamespace, false);
   portENTER_CRITICAL(&lock_);
   state_.storage_ready = storage_ready_;
   portEXIT_CRITICAL(&lock_);
@@ -323,11 +348,11 @@ void TuyaControl::run() {
   state_.reads_enabled = gates.reads;
   state_.control_enabled = gates.control;
   portEXIT_CRITICAL(&lock_);
-  if (storage_ready_ && preferences_.isKey("lease")) {
+  if (storage_ready_ && preferences_.isKey(boiler_config::kLeaseKey)) {
     boiler_policy::Lease lease{};
     if (boiler_policy::loadLease(preferences_, lease)) {
       lease_valid_ = true;
-      lease_deadline_ = lease.deadline;
+      lease_ = lease;
       portENTER_CRITICAL(&lock_);
       state_.lease_active = true;
       portEXIT_CRITICAL(&lock_);
@@ -356,14 +381,11 @@ void TuyaControl::run() {
       portEXIT_CRITICAL(&lock_);
     }
     const uint32_t ms = millis();
-    if (lease_valid_ && online() && static_cast<int32_t>(ms - next_safety) >= 0) {
+    if (lease_valid_ && online() && boiler_policy::offRetryDue(ms, next_safety)) {
       const auto wifi = network_->snapshot();
       const int64_t now = time(nullptr);
-      boiler_policy::Lease lease{boiler_policy::kLeaseVersion, lease_deadline_,
-                                  lease_deadline_ - boiler_policy::kMaxOnSeconds};
-      const bool monotonic_due = lease_started_ms_ &&
-          static_cast<uint32_t>(ms - lease_started_ms_) >= boiler_policy::kMaxOnSeconds * 1000U;
-      if (monotonic_due || boiler_policy::due(lease, now, wifi.clock_synced)) {
+      const bool monotonic_due = boiler_policy::monotonicLeaseDue(lease_started_ms_, ms);
+      if (monotonic_due || boiler_policy::due(lease_, now, wifi.clock_synced)) {
         portENTER_CRITICAL(&lock_);
         const bool reserved = boiler_policy::reserve(pending_, static_cast<uint8_t>(state_.progress));
         portEXIT_CRITICAL(&lock_);
@@ -377,48 +399,38 @@ void TuyaControl::run() {
           portENTER_CRITICAL(&lock_);
           pending_ = false;
           portEXIT_CRITICAL(&lock_);
-          next_safety = millis() + kRetryMs;
+          next_safety = boiler_policy::nextOffRetryMs(millis());
         }
       }
     }
     const Snapshot current = snapshot();
     if (!online()) {
-      if (device_->sessionReady()) device_->closeConnection();
+      client.disconnect();
       portENTER_CRITICAL(&lock_);
       state_.connected = false;
       portEXIT_CRITICAL(&lock_);
-      next_reconnect_ms_ = millis();
     } else if (current.reads_enabled &&
                !boiler_policy::busy(false, static_cast<uint8_t>(current.progress))) {
-      if (!device_->sessionReady()) {
-        if (static_cast<int32_t>(ms - next_reconnect_ms_) >= 0 && connectSession())
-          readStatus();  // Reconcile immediately after every new handshake.
-      } else {
-        const auto event = device_->pollFrame();
-        if (event == LynkTuyaDevice<TUYA_V34>::PollResult::Invalid ||
-            event == LynkTuyaDevice<TUYA_V34>::PollResult::Disconnected) {
-          recordProtocol(false, LynkTuyaDevice<TUYA_V34>::errorName(device_->lastError()));
-          sessionFailure("frame or connection failure");
-        } else if (static_cast<int32_t>(ms - next_heartbeat_ms_) >= 0) {
-          next_heartbeat_ms_ = millis() + boiler_policy::kHeartbeatMs;
-          if (!device_->heartbeat(false)) {
-            portENTER_CRITICAL(&lock_);
-            ++state_.heartbeat_failures;
-            portEXIT_CRITICAL(&lock_);
-            recordProtocol(false, LynkTuyaDevice<TUYA_V34>::errorName(device_->lastError()));
-            sessionFailure("heartbeat failure");
-          }
-        } else if (static_cast<int32_t>(ms - next_reconcile_ms_) >= 0) {
-          readStatus();
-        }
-      }
-      if (boiler_policy::stale(current.last_confirmed_ms, millis())) {
+      const auto before = client.diagnostics();
+      client.poll(true);
+      const auto after = client.diagnostics();
+      // Application DPS rejection is already recorded by applyStatus(); only
+      // transport errors added by this poll need a diagnostic record.
+      if (after.connectionErrors + after.authenticationErrors + after.invalidResponses >
+          before.connectionErrors + before.authenticationErrors + before.invalidResponses)
+        recordProtocol(false, TuyaLocalClient::errorName(after.lastError));
+      portENTER_CRITICAL(&lock_);
+      state_.reconnects = after.sessions;
+      state_.heartbeat_failures = after.heartbeatFailures;
+      if (!after.connected) state_.connected = false;
+      portEXIT_CRITICAL(&lock_);
+      if (boiler_policy::stale(snapshot().last_confirmed_ms, millis())) {
         portENTER_CRITICAL(&lock_);
         state_.connected = false;
         portEXIT_CRITICAL(&lock_);
       }
-    } else if (!current.reads_enabled && !lease_valid_ && device_->sessionReady()) {
-      device_->closeConnection();
+    } else if (!current.reads_enabled && !lease_valid_ && client.connected()) {
+      client.disconnect();
     }
   }
 }

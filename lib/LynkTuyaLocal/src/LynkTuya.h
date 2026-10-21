@@ -36,7 +36,7 @@ enum TuyaProtocolVersion {
 #define TUYA_PORT 6668
 #define RESPONSE_BUFFER_SIZE 256
 #define PAYLOAD_BUFFER_SIZE 256
-#define POLL_FRAME_TIMEOUT_MS 300  // max wait to finish an in-flight frame during poll(0)
+#define POLL_FRAME_TIMEOUT_MS 300  // default partial-frame deadline; configurable by wrapper
 
 /* CLASS DEFINITION*/
 template<TuyaProtocolVersion _VERSION>
@@ -99,6 +99,12 @@ public:
   void setTimeout(uint32_t timeoutMs) {
     _timeoutMs = timeoutMs;
   }
+  void setPort(uint16_t port) { _port = port; }
+  void setConnectTimeout(uint32_t timeoutMs) { _connectTimeoutMs = timeoutMs; }
+  void setPartialFrameTimeout(uint32_t timeoutMs) { _partialFrameTimeoutMs = timeoutMs; }
+  void setReadBudget(size_t bytes) { _readBudget = bytes; }
+  void setTransportError(Error error) { _lastError = error; }
+  enum class AsyncResult : uint8_t { Pending, Push, Complete, Invalid };
 
   // Called whenever the device pushes a dps update (command 8) on an open
   // connection - e.g. when the physical button is pressed. Received frames
@@ -116,10 +122,10 @@ public:
     LYNK_LOG("Connecting to plug ");
     LYNK_LOG(_ipAddress);
     LYNK_LOG(':');
-    LYNK_LOG(TUYA_PORT);
+    LYNK_LOG(_port);
     const bool connected = _client == &_ownClient
-        ? _ownClient.connect(_ipAddress, TUYA_PORT, 3000)
-        : _client->connect(_ipAddress, TUYA_PORT);
+        ? _ownClient.connect(_ipAddress, _port, _connectTimeoutMs)
+        : _client->connect(_ipAddress, _port);
     if (!connected) {
       _lastError = Error::Connect;
       LYNK_LOGLN(" - failed");
@@ -134,6 +140,8 @@ public:
   bool closeConnection() {
     _client->stop();
     _sessionReady = false;
+    _partialSize = 0;
+    _partialExpected = 0;
     return true;
   }
 
@@ -157,6 +165,96 @@ public:
     _sessionReady = true;
     return true;
   }
+
+  // Cooperative counterparts of the synchronous exchanges. The caller owns
+  // the TCP socket and must flush queued writes before awaiting a response.
+  bool startHandshake() {
+    _sessionReady = false;
+    _partialSize = _partialExpected = 0;
+    if (_handshakeStarted) {
+      for (size_t i = 0; i < sizeof(_localNonce); ++i)
+        _localNonce[i] = static_cast<uint8_t>(esp_random());
+      _prepareCmd03Request();
+    }
+    _handshakeStarted = true;
+    if (_sendCommand3()) return true;
+    _lastError = Error::HandshakeFailure;
+    return false;
+  }
+
+  AsyncResult advanceHandshake() {
+    const int command = _readFrameStep(_partialFrameTimeoutMs);
+    if (command == -2) return AsyncResult::Pending;
+    if (command < 0) return AsyncResult::Invalid;
+    if (command != 0x04) {
+      _lastError = Error::HandshakeFailure;
+      return AsyncResult::Invalid;
+    }
+    if (!_parseCommand3Response()) return AsyncResult::Invalid;
+    if (!_sendCommand5()) {
+      _lastError = Error::HandshakeFailure;
+      return AsyncResult::Invalid;
+    }
+    _calculateSessionKey();
+    _seqNo = 3;
+    _sessionReady = true;
+    return AsyncResult::Complete;
+  }
+
+  bool startHeartbeat() {
+    return sessionReady() && _sendSessionFrame(0x09, nullptr, 0);
+  }
+
+  bool startStatus() {
+    if (!_deviceId || !_deviceId[0]) {
+      _lastError = Error::MissingDeviceId;
+      return false;
+    }
+    if (!sessionReady()) { _lastError = Error::Connect; return false; }
+    char query[192];
+    const int length = snprintf(query, sizeof(query),
+        "{\"gwId\":\"%s\",\"devId\":\"%s\",\"t\":\"%lu\",\"dps\":{},\"uid\":\"%s\"}",
+        _deviceId, _deviceId, static_cast<unsigned long>(time(nullptr)), _deviceId);
+    if (length < 0 || static_cast<size_t>(length) >= sizeof(query)) {
+      _lastError = Error::MalformedFrame;
+      return false;
+    }
+    return _sendSessionFrame(0x10, reinterpret_cast<const uint8_t*>(query), length);
+  }
+
+  bool startBooleanDps(const char* dpsId, bool value, uint32_t timestamp) {
+    if (!sessionReady()) { _lastError = Error::Connect; return false; }
+    char json[96];
+    const int length = snprintf(json, sizeof(json),
+        "{\"protocol\":5,\"t\":%lu,\"data\":{\"dps\":{\"%s\":%s}}}",
+        static_cast<unsigned long>(timestamp), dpsId, value ? "true" : "false");
+    if (length < 0 || static_cast<size_t>(length) >= sizeof(json) ||
+        static_cast<size_t>(length) + 15 > PAYLOAD_BUFFER_SIZE - 16) {
+      _lastError = Error::MalformedFrame;
+      return false;
+    }
+    uint8_t plain[15 + sizeof(json)];
+    memcpy_P(plain, V34_PAYLOAD_PREFIX_MAGIC, 15);
+    memcpy(plain + 15, json, length);
+    return _sendSessionFrame(0x0d, plain, 15 + length);
+  }
+
+  AsyncResult advanceResponse(uint32_t expectedCmd, String* jsonOut = nullptr) {
+    const int command = _readFrameStep(_partialFrameTimeoutMs);
+    if (command == -2) return AsyncResult::Pending;
+    if (command < 0) return AsyncResult::Invalid;
+    if (command == 0x08) {
+      return _handlePush() ? AsyncResult::Push : AsyncResult::Invalid;
+    }
+    if (static_cast<uint32_t>(command) != expectedCmd) {
+      _lastError = Error::UnsupportedResponseCommand;
+      return AsyncResult::Invalid;
+    }
+    if (expectedCmd != 0x09 && !_parseCommandResponse(expectedCmd == 0x0d))
+      return AsyncResult::Invalid;
+    if (jsonOut && expectedCmd == 0x10) *jsonOut = _lastJson;
+    return AsyncResult::Complete;
+  }
   
   // ---------- Heartbeat 0x09 HEART_BEAT ----------
   // Keeps a long-lived connection alive (command 9). Call every ~10s to
@@ -176,12 +274,15 @@ public:
   // immediately when no data is pending. Returns true if a frame was read.
   PollResult pollFrame(uint32_t waitMs = 0) {
     if (!_client->connected()) { _lastError = Error::Connect; return PollResult::Disconnected; }
-    if (waitMs == 0 && !_client->available()) return PollResult::NoFrame;
-    // With waitMs = 0 a frame has already started arriving; give it a short,
-    // bounded window to finish rather than the full response timeout, so a
-    // stalled or partial frame can't block the caller's loop() for seconds.
-    uint32_t frameTimeout = (waitMs == 0) ? POLL_FRAME_TIMEOUT_MS : waitMs;
-    int cmd = _readFrame(frameTimeout);
+    // A zero-wait poll consumes at most one available segment. In particular,
+    // a fragmented TCP frame is retained between calls without delay(1).
+    int cmd = waitMs ? _readFrame(waitMs) : _readFrameStep(_partialFrameTimeoutMs);
+    // A complete frame already buffered by TCP needs one header and one body
+    // read; both are bounded to the fixed response buffer.
+    if (!waitMs && cmd == -2 && _partialSize == ((_VERSION == TUYA_V34) ? 16U : 18U) &&
+        _client->available() > 0)
+      cmd = _readFrameStep(_partialFrameTimeoutMs);
+    if (cmd == -2) return PollResult::NoFrame;
     if (cmd < 0) return PollResult::Invalid;
     if (cmd == 0x08 || cmd == 0x10) {
       if (!_handlePush()) return PollResult::Invalid;
@@ -464,72 +565,66 @@ private:
 
   /*====================================FRAME READING====================================*/
 
-  // Reads exactly `need` bytes into dst, tolerating TCP fragmentation.
-  bool _readExact(uint8_t* dst, size_t need, unsigned long start, uint32_t timeoutMs) {
-    size_t got = 0;
-    while (got < need) {
-      if (millis() - start > timeoutMs) {
-        _lastError = got ? Error::IncompleteFrame : Error::Timeout;
-        LYNK_LOG(F("timeout reading frame, connected="));
-        LYNK_LOGLN(_client->connected());
-        return false;
-      }
-      int avail = _client->available();
-      if (avail > 0) {
-        size_t want = need - got;
-        if ((size_t)avail < want) want = avail;
-        int n = _client->read(dst + got, want);
-        if (n > 0) got += n;
-      } else {
-        delay(1);
-      }
-    }
-    return true;
-  }
-
-  // Reads one complete Tuya frame (header + declared length) into
-  // _response_buffer, waiting out split TCP segments. Returns the frame's
-  // command id, or -1 on timeout / malformed data.
-  int _readFrame(uint32_t timeoutMs) {
+  // Consume at most one available TCP segment. -2 means incomplete/no frame;
+  // -1 means a timeout or invalid frame. The same accumulator is used by
+  // synchronous command waits, so a push split across poll() calls is not lost.
+  int _readFrameStep(uint32_t timeoutMs) {
     const size_t headerLen = (_VERSION == TUYA_V34) ? 16 : 18;
-    unsigned long start = millis();
-    memset(_response_buffer, 0, RESPONSE_BUFFER_SIZE);
-    _responseSize = 0;
-    _lastFrameLength = 0;
-    _lastResponseCommand = 0;
-    _lastResponseType = ResponseType::None;
-    if (!_readExact(_response_buffer, headerLen, start, timeoutMs)) return -1;
-
-    const uint8_t* prefix = (_VERSION == TUYA_V34) ? V34_PREFIX_MAGIC : V35_PREFIX_MAGIC;
-    for (int i = 0; i < 4; i++) {
-      if (_response_buffer[i] != pgm_read_byte(prefix + i)) {
+    const uint32_t now = millis();
+    if (_partialSize && static_cast<uint32_t>(now - _partialStartedMs) >= timeoutMs) {
+      _partialSize = _partialExpected = 0;
+      _lastError = Error::IncompleteFrame;
+      return -1;
+    }
+    int available = _client->available();
+    if (available <= 0) return -2;
+    if (!_readBudget) return -2;
+    if (!_partialSize) {
+      _partialStartedMs = now;
+      _responseSize = 0;
+      _lastFrameLength = 0;
+      _lastResponseCommand = 0;
+      _lastResponseType = ResponseType::None;
+    }
+    const size_t target = _partialExpected ? _partialExpected : headerLen;
+    size_t take = target - _partialSize;
+    if (take > static_cast<size_t>(available)) take = available;
+    if (take > _readBudget) take = _readBudget;
+    const int got = _client->read(_response_buffer + _partialSize, take);
+    if (got <= 0) return -2;
+    _readBudget -= got;
+    _partialSize += got;
+    if (_partialSize < headerLen) return -2;
+    if (!_partialExpected) {
+      const uint8_t* prefix = (_VERSION == TUYA_V34) ? V34_PREFIX_MAGIC : V35_PREFIX_MAGIC;
+      for (size_t i = 0; i < 4; ++i) {
+        if (_response_buffer[i] != pgm_read_byte(prefix + i)) {
+          _lastError = Error::MalformedFrame;
+          _partialSize = 0;
+          return -1;
+        }
+      }
+      const uint32_t length = readU32BE(_response_buffer + headerLen - 4);
+      const size_t suffix = (_VERSION == TUYA_V35) ? 4 : 0;
+      if (length < 8 || length > RESPONSE_BUFFER_SIZE - headerLen - suffix) {
         _lastError = Error::MalformedFrame;
-        LYNK_LOGLN("Frame with unexpected prefix, dropping");
+        _partialSize = 0;
         return -1;
       }
+      _partialExpected = headerLen + length + suffix;
+      _lastFrameLength = _partialExpected;
     }
-
-    uint32_t length = readU32BE(_response_buffer + headerLen - 4);
+    if (_partialSize < _partialExpected) return -2;
+    const size_t total = _partialExpected;
+    _partialSize = _partialExpected = 0;
+    _responseSize = total;
+    const uint32_t length = readU32BE(_response_buffer + headerLen - 4);
     uint32_t cmd = readU32BE(_response_buffer + (_VERSION == TUYA_V34 ? 8 : 10));
     _lastResponseCommand = cmd;
     _lastResponseType = cmd == 0x04 ? ResponseType::Handshake :
                         cmd == 0x10 ? ResponseType::Status :
                         cmd == 0x08 ? ResponseType::Push :
                         cmd == 0x0d ? ResponseType::Control : ResponseType::Other;
-    // v3.4 length covers everything after the header; v3.5 excludes the suffix.
-    // Bound the attacker-controlled length against the buffer BEFORE adding it,
-    // so a near-UINT32_MAX value can't wrap `total` to a small number and slip
-    // an unbounded read past the check below.
-    const size_t suffix = (_VERSION == TUYA_V35) ? 4 : 0;
-    if (length < 8 || length > RESPONSE_BUFFER_SIZE - headerLen - suffix) {
-      _lastError = Error::MalformedFrame;
-      LYNK_LOGLN("Frame length out of range");
-      return -1;
-    }
-    size_t total = headerLen + length + suffix;
-    _lastFrameLength = total;
-    if (!_readExact(_response_buffer + headerLen, total - headerLen, start, timeoutMs)) return -1;
-    _responseSize = total;
     if (_VERSION == TUYA_V34) {
       if (length < 36 || total < 52) { _lastError = Error::MalformedFrame; return -1; }
       uint8_t mismatch = 0;
@@ -549,6 +644,22 @@ private:
     LYNK_LOGLN(" bytes:");
     LYNK_LOG_HEX(_response_buffer, _responseSize);
     return (int)cmd;
+  }
+
+  // Legacy explicit operations still wait for their response. They share the
+  // incremental accumulator with pollFrame() and retain their deadline.
+  int _readFrame(uint32_t timeoutMs) {
+    const uint32_t started = millis();
+    do {
+      const uint32_t elapsed = static_cast<uint32_t>(millis() - started);
+      if (elapsed >= timeoutMs) break;
+      const int result = _readFrameStep(timeoutMs);
+      if (result != -2) return result;
+      delay(1);
+    } while (true);
+    _lastError = _partialSize ? Error::IncompleteFrame : Error::Timeout;
+    _partialSize = _partialExpected = 0;
+    return -1;
   }
 
   // Waits for a frame with the expected command id, dispatching any dps
@@ -1096,6 +1207,11 @@ private:
   uint8_t _cmd3_request[84];  //84 v34; 66 v35
   uint8_t _response_buffer[RESPONSE_BUFFER_SIZE];
   size_t _responseSize = 0;
+  size_t _partialSize = 0;
+  size_t _partialExpected = 0;
+  size_t _readBudget = SIZE_MAX;
+  uint32_t _partialStartedMs = 0;
+  uint32_t _partialFrameTimeoutMs = POLL_FRAME_TIMEOUT_MS;
   Error _lastError = Error::None;
   bool _sessionReady = false;
   bool _handshakeStarted = false;
@@ -1109,6 +1225,8 @@ private:
   Client* _client;
   uint32_t _seqNo = 3;  //1-cmd3,2-cmd5
   uint32_t _timeoutMs = 5000;
+  uint16_t _port = TUYA_PORT;
+  uint32_t _connectTimeoutMs = 3000;
   String _lastJson;
   DpsCallback _pushCallback = nullptr;
   void* _pushContext = nullptr;

@@ -220,7 +220,7 @@ void BoilerWeb::status() {
   data.lastFrameLength = state.last_frame_length;
   data.lastResponseType = state.last_response_type;
   data.lastFailure = state.last_failure;
-  data.reconcileIntervalMs = boiler_policy::kReconcileMs;
+  data.reconcileIntervalMs = state.reconcile_interval_ms;
   data.ssid = ssid.c_str();
   data.ip = ip.c_str();
   data.rssiDbm = WiFi.RSSI();

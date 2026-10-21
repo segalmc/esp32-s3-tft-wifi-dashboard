@@ -4,7 +4,8 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include "NetworkManager.h"
-#include "LynkTuya.h"
+#include "BoilerPolicy.h"
+#include "TuyaLocalClient.h"
 
 class TuyaControl {
  public:
@@ -31,6 +32,7 @@ class TuyaControl {
     uint32_t push_events;
     uint32_t reconnects;
     uint32_t heartbeat_failures;
+    uint32_t reconcile_interval_ms;
     char result[48];
     uint32_t last_response_command;
     uint16_t last_frame_length;
@@ -55,6 +57,8 @@ class TuyaControl {
   void sessionFailure(const char* failure);
   void applyPush(const String& json);
   static void pushEntry(void* context, const String& json);
+  void applyStatus(const String& json);
+  static void statusEntry(void* context, const String& json);
   void recordProtocol(bool valid, const char* failure);
   void execute(Request request);
   bool persistLease(int64_t now);
@@ -71,12 +75,8 @@ class TuyaControl {
   bool task_ready_ = false;
   bool lease_valid_ = false;
   bool monitor_armed_ = false;
-  uint8_t reconnect_failures_ = 0;
-  uint32_t next_reconnect_ms_ = 0;
-  uint32_t next_reconcile_ms_ = 0;
-  uint32_t next_heartbeat_ms_ = 0;
-  LynkTuyaDevice<TUYA_V34>* device_ = nullptr;
-  int64_t lease_deadline_ = 0;
+  TuyaLocalClient* client_ = nullptr;
+  boiler_policy::Lease lease_{};
   uint32_t lease_started_ms_ = 0;
   Preferences preferences_;
 };

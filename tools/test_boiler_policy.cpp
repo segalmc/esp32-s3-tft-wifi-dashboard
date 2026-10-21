@@ -33,8 +33,12 @@ struct MockNvs {
   uint8_t getUChar(const char*, uint8_t fallback) {
     return monitor_present ? monitor_value : fallback;
   }
-  bool isKey(const char*) { return monitor_present; }
-  bool remove(const char*) { monitor_present = false; return true; }
+  bool isKey(const char* key) { return strcmp(key, "lease") == 0 ? present : monitor_present; }
+  bool remove(const char* key) {
+    if (strcmp(key, "lease") == 0) present = false;
+    else monitor_present = false;
+    return true;
+  }
 };
 
 int main() {
@@ -65,6 +69,42 @@ int main() {
   Lease rebooted{};
   assert(loadLease(nvs, rebooted) && rebooted.deadline == lease.deadline);
   assert(due(rebooted, start + 1, false));
+  const BoilerConfig shorter{900, 5000, 5000, 20000, 3, 800};
+  assert(boiler_config::valid(shorter));
+  assert(!boiler_config::valid(BoilerConfig{3600}));
+  assert(!boiler_config::valid(BoilerConfig{1800, 60000}));
+  assert(!boiler_config::valid(BoilerConfig{1800, 15000, 30000, 20000}));
+  assert(!boiler_config::valid(BoilerConfig{1800, 15000, 30000, 45000, 1}));
+  assert(!boiler_config::valid(BoilerConfig{1800, 15000, 30000, 45000, 3, 800,
+      static_cast<BoilerConfig::ClockRequirement>(0)}));
+  assert(!boiler_config::valid(BoilerConfig{1800, 15000, 30000, 45000, 3, 800,
+      BoilerConfig::ClockRequirement::SynchronizedNtp,
+      static_cast<BoilerConfig::Persistence>(0)}));
+  assert(!mayTurnOn(true, start, true, BoilerConfig{3600}));
+  assert(!freshConfirmedOff(true, true, 100, 6100, shorter));
+  assert(stale(100, 20101, shorter));
+  assert(!due(rebooted, start + 899, true));
+  assert(due(rebooted, start + 900, true, shorter));
+  assert(rebooted.deadline == start + 1800);  // Old NVS record was not rewritten.
+  const auto shortenedLease = makeLease(start, shorter);
+  assert(shortenedLease.version == kShortLeaseVersion && validLease(shortenedLease));
+  MockNvs shorterNvs;
+  assert(saveLease(shorterNvs, shortenedLease));
+  Lease recoveredShort{};
+  assert(loadLease(shorterNvs, recoveredShort));
+  assert(!due(recoveredShort, start + 899, true));
+  assert(due(recoveredShort, start + 900, true));
+  assert(due(recoveredShort, start + 900, true, BoilerConfig{}));
+  assert(!monotonicLeaseDue(1000, 900999, shorter));
+  assert(monotonicLeaseDue(1000, 901000, shorter));
+  assert(!monotonicLeaseDue(0, 901000, shorter));
+  const uint32_t nextRetry = nextOffRetryMs(1000, shorter);
+  assert(nextRetry == 6000);
+  assert(!offRetryDue(5999, nextRetry));
+  assert(offRetryDue(6000, nextRetry));
+  assert(offRetryDue(0, nextOffRetryMs(UINT32_MAX - 4999, shorter)));
+  assert(!saveLease(shorterNvs, makeLease(start + 100, BoilerConfig{})));
+  assert(shorterNvs.data.deadline == start + 900);  // No deadline extension.
   assert(reconnectDelayMs(0) == 1000);
   assert(reconnectDelayMs(1) == 2000);
   assert(reconnectDelayMs(9) == 32000);
