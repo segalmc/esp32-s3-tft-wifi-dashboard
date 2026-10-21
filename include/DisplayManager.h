@@ -5,6 +5,7 @@
 
 #if TFT_HARDWARE_ENABLED
 #include "NetworkManager.h"
+#include "TuyaControl.h"
 #include <TFT_eSPI.h>
 #endif
 
@@ -18,6 +19,7 @@ class DisplayManager {
   void updateClock(bool ntp_synced, uint32_t now_ms);
   void updateOta(NetworkManager::OtaSnapshot ota, const char* password,
                  bool reveal, uint32_t now_ms);
+  void updateBoiler(TuyaControl::Snapshot state);
   uint32_t lastRefreshUs() const { return last_refresh_us_; }
 #endif
 
@@ -28,6 +30,7 @@ class DisplayManager {
   void drawDashboardFrame();
   void updateDashboard();
   void drawValue(uint8_t row, const char* value);
+  void drawBoilerValue();
   void restoreValueRegion(uint8_t row);
   void streamAssetRegion(const uint16_t* pixels, int16_t x, int16_t y,
                          int16_t width, int16_t height);
@@ -74,5 +77,6 @@ class DisplayManager {
   uint32_t phase_started_ms_ = 0;
   uint32_t last_dashboard_ms_ = 0;
   char cached_values_[8][32] = {};
+  TuyaControl::Snapshot boiler_state_{};
 #endif
 };

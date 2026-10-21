@@ -9,6 +9,7 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+class TuyaControl;
 
 class NetworkManager {
  public:
@@ -28,6 +29,7 @@ class NetworkManager {
   };
 
   void begin();
+  void attachTuya(TuyaControl* control) { tuya_ = control; }
   void update();  // USB commands only; Wi-Fi and HTTP run in the network task.
   Snapshot snapshot() const;
   bool copySetupPassword(char* output, size_t size) const;
@@ -100,6 +102,7 @@ class NetworkManager {
   char serial_line_[32] = {};
   uint8_t serial_length_ = 0;
   QueueHandle_t commands_ = nullptr;
+  TuyaControl* tuya_ = nullptr;
   Preferences preferences_;
   DNSServer dns_;
   WebServer server_{IPAddress(192, 168, 4, 1), 80};

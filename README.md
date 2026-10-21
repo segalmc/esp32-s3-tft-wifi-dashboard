@@ -9,6 +9,8 @@ See [Phase 2 wiring and diagnostics](docs/phase2-tft.md).
 The TFT dashboard now has a photographic [Nature Glass design](docs/nature-glass.md),
 including source attribution, asset regeneration, and display validation steps.
 The TFT firmware also has a [Wi-Fi setup and recovery portal](docs/wifi-setup.md).
+The direct Tuya boiler proof of concept, USB gates, local Web dashboard, and
+hardware approval stages are documented in [boiler POC](docs/boiler-poc.md).
 For authenticated wireless firmware updates, follow the
 [OTA installation and backup guide](docs/ota.md) before the first USB upload.
 A [320 × 480 background preview](assets/dashboard-preview.png) shows the photograph

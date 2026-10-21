@@ -5,4 +5,5 @@
 .vscode/ipch/
 .env
 secrets.h
+.boiler-web-password
 __pycache__/

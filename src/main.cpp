@@ -5,6 +5,8 @@
 #include "SystemMonitor.h"
 #if TFT_HARDWARE_ENABLED
 #include "NetworkManager.h"
+#include "TuyaControl.h"
+#include "BoilerWeb.h"
 #endif
 
 #ifndef CONFIG_IDF_TARGET_ESP32S3
@@ -15,6 +17,8 @@ SystemMonitor system_monitor;
 DisplayManager display_manager;
 #if TFT_HARDWARE_ENABLED
 NetworkManager network_manager;
+TuyaControl tuya_control;
+BoilerWeb boiler_web;
 uint32_t last_loop_ms = 0;
 uint32_t stats_started_ms = 0;
 uint32_t max_loop_gap_ms = 0;
@@ -28,12 +32,18 @@ void setup() {
   display_manager.begin();
 #if TFT_HARDWARE_ENABLED
   network_manager.begin();
+  tuya_control.begin(&network_manager);
+  network_manager.attachTuya(&tuya_control);
+  boiler_web.begin(&network_manager, &tuya_control);
 #endif
 }
 
 void loop() {
   const uint32_t now_ms = millis();
   system_monitor.update(now_ms);
+#if TFT_HARDWARE_ENABLED
+  display_manager.updateBoiler(tuya_control.snapshot());
+#endif
   display_manager.update(now_ms);
 #if TFT_HARDWARE_ENABLED
   network_manager.update();

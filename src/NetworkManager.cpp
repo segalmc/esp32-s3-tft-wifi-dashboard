@@ -1,6 +1,7 @@
 #include "NetworkManager.h"
 #include "NetworkPolicy.h"
 #include "OtaPolicy.h"
+#include "TuyaControl.h"
 
 #if TFT_HARDWARE_ENABLED
 #include <esp_system.h>
@@ -401,6 +402,63 @@ void NetworkManager::processSerial() {
                       static_cast<unsigned>(current.state), current.ap_active ? "on" : "off",
                       current.clock_synced ? "synced" : "pending", ip, ssid, rssi_text,
                       ESP.getFreeHeap(), ESP.getFreePsram());
+      } else if (tuya_ && strncmp(serial_line_, "tuya", 4) == 0) {
+        if (strcmp(serial_line_, "tuya help") == 0) {
+          Serial.println("Tuya USB: tuya status | on | off | reconnect | diagnostics | help");
+          Serial.println("Tuya monitor: tuya monitor arm | tuya monitor disarm (USB only; arm only after proxy stops)");
+          Serial.println("Tuya gates: tuya enable reads (temporary) | tuya enable control (armed monitor only)");
+        } else if (strcmp(serial_line_, "tuya monitor arm") == 0 ||
+                   strcmp(serial_line_, "tuya monitor disarm") == 0) {
+          const bool arm = strcmp(serial_line_, "tuya monitor arm") == 0;
+          const auto answer = tuya_->request(arm ? TuyaControl::Request::ArmMonitor :
+                                                  TuyaControl::Request::DisarmMonitor);
+          Serial.printf("Tuya: monitor %s %s\n", arm ? "arm" : "disarm",
+                        TuyaControl::acceptName(answer));
+        } else if (strcmp(serial_line_, "tuya enable reads") == 0) {
+          tuya_->enableReadsFromUsb();
+          Serial.println("Tuya: read gate enabled for this boot");
+        } else if (strcmp(serial_line_, "tuya enable control") == 0) {
+          Serial.println(tuya_->enableControlFromUsb() ?
+              "Tuya: control gate enabled for this boot" :
+              "Tuya: control gate remains closed; arm monitor first");
+        } else if (strcmp(serial_line_, "tuya diagnostics") == 0 ||
+                   strcmp(serial_line_, "tuya status") == 0) {
+          const auto state = tuya_->snapshot();
+          Serial.printf("Tuya: relay=%s connected=%s progress=%s result=%s lease=%s read_gate=%s control_gate=%s\n",
+                        TuyaControl::relayName(state.relay), state.connected ? "yes" : "no",
+                        TuyaControl::progressName(state.progress), state.result,
+                        state.lease_active ? "yes" : "no", state.reads_enabled ? "on" : "off",
+                        state.control_enabled ? "on" : "off");
+          if (strcmp(serial_line_, "tuya diagnostics") == 0)
+          Serial.printf("Tuya diagnostics: failures=%lu connection_or_timeout=%lu authentication=%lu invalid_responses=%lu last_confirmed_ms=%lu command_id=%lu pushes=%lu sessions=%lu heartbeat_failures=%lu monitor_armed=%s reconcile=30s session=persistent protocol=3.4 cmd=0x%02lX frame_len=%u response=%s failure=%s\n",
+                          static_cast<unsigned long>(state.failures),
+                          static_cast<unsigned long>(state.connection_failures),
+                          static_cast<unsigned long>(state.authentication_failures),
+                          static_cast<unsigned long>(state.auth_or_parse_failures),
+                          static_cast<unsigned long>(state.last_confirmed_ms),
+                          static_cast<unsigned long>(state.command_id),
+                          static_cast<unsigned long>(state.push_events),
+                          static_cast<unsigned long>(state.reconnects),
+                          static_cast<unsigned long>(state.heartbeat_failures),
+                          state.monitor_armed ? "yes" : "no",
+                          static_cast<unsigned long>(state.last_response_command),
+                          static_cast<unsigned>(state.last_frame_length),
+                          state.last_response_type, state.last_failure);
+          else {
+            const auto answer = tuya_->request(TuyaControl::Request::Status);
+            Serial.printf("Tuya: status read %s\n", TuyaControl::acceptName(answer));
+          }
+        } else {
+          TuyaControl::Request request;
+          if (strcmp(serial_line_, "tuya on") == 0) request = TuyaControl::Request::On;
+          else if (strcmp(serial_line_, "tuya off") == 0) request = TuyaControl::Request::Off;
+          else if (strcmp(serial_line_, "tuya reconnect") == 0) request = TuyaControl::Request::Reconnect;
+          else { Serial.println("Tuya: unknown command; use tuya help"); serial_length_ = 0; continue; }
+          uint32_t id = 0;
+          const auto answer = tuya_->request(request, &id);
+          Serial.printf("Tuya: request %s (id=%lu); inspect tuya status for verification\n",
+                        TuyaControl::acceptName(answer), static_cast<unsigned long>(id));
+        }
       }
       serial_length_ = 0;
     } else if (serial_length_ < sizeof(serial_line_) - 1) {

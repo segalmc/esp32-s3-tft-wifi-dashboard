@@ -19,7 +19,7 @@
 namespace {
 constexpr uint16_t kColors[] = {TFT_RED, TFT_GREEN, TFT_BLUE, TFT_WHITE, TFT_BLACK};
 constexpr const char* kPhaseNames[] = {"red", "green", "blue", "white", "black", "graphics"};
-constexpr const char* kLabels[] = {"CHIP", "UPTIME", "FREE HEAP", "PSRAM TOTAL",
+constexpr const char* kLabels[] = {"BOILER", "UPTIME", "FREE HEAP", "PSRAM TOTAL",
                                    "PSRAM FREE", "FLASH", "RESOLUTION", "REFRESH"};
 constexpr uint32_t kPhaseDurationMs = 1500;
 constexpr uint32_t kDashboardIntervalMs = 1000;
@@ -44,9 +44,12 @@ alignas(4) const uint16_t kKnownImage[32 * 32] PROGMEM = {
 #undef TEST_EIGHT
 #undef TEST_ROW
 #endif
-int16_t cardX(uint8_t index) { return 12 + (index % 2) * 153; }
-int16_t cardY(uint8_t index) { return 188 + (index / 2) * 67; }
-int16_t valueX(uint8_t index) { return (cardX(index) + 13) & ~1; }
+constexpr int16_t cardX(uint8_t index) { return 12 + (index % 2) * 153; }
+constexpr int16_t cardY(uint8_t index) { return 188 + (index / 2) * 67; }
+constexpr int16_t valueX(uint8_t index) { return (cardX(index) + 13) & ~1; }
+static_assert(valueX(0) >= cardX(0) && valueX(0) + kValueWidth <= cardX(0) + 144 &&
+              cardY(0) + 32 >= cardY(0) && cardY(0) + 32 + kValueHeight <= cardY(0) + 59,
+              "Boiler redraw must stay inside Nature Glass card 0");
 uint32_t assetChecksum(const uint16_t* pixels) {
   uint32_t checksum = 0;
   for (size_t i = 0; i < kBackgroundWidth * kBackgroundHeight; ++i) {
@@ -518,6 +521,41 @@ void DisplayManager::drawValue(uint8_t row, const char* value) {
   cached_values_[row][sizeof(cached_values_[row]) - 1] = '\0';
 }
 
+void DisplayManager::updateBoiler(TuyaControl::Snapshot state) {
+  boiler_state_ = state;
+  // The main loop receives authenticated push state on its next pass. Redraw
+  // only card 0 when its displayed value changes, without waiting for the
+  // once-per-second refresh of the other seven cards.
+  if (dashboard_ready_) drawBoilerValue();
+}
+
+void DisplayManager::drawBoilerValue() {
+  const auto& state = boiler_state_;
+  const bool stale = !state.connected ||
+      static_cast<uint32_t>(millis() - state.last_confirmed_ms) > 45000U;
+  const bool uncertain = state.progress == TuyaControl::Progress::Uncertain ||
+                         state.progress == TuyaControl::Progress::Pending ||
+                         state.progress == TuyaControl::Progress::Sending ||
+                         state.progress == TuyaControl::Progress::Verifying;
+  const char* label = state.relay == TuyaControl::Relay::On ? (stale ? "ON STALE" : "ON") :
+                      state.relay == TuyaControl::Relay::Off ? (stale ? "OFF STALE" : "OFF") : "UNKNOWN";
+  const uint16_t color = uncertain ? kOrange : stale ? TFT_RED :
+                         state.relay == TuyaControl::Relay::On ? TFT_GREEN : 0x8410;
+  char key[32];
+  snprintf(key, sizeof(key), "%s:%u", label, static_cast<unsigned>(color));
+  if (strcmp(cached_values_[0], key) == 0) return;
+  restoreValueRegion(0);
+  const int16_t x = valueX(0);
+  const int16_t y = cardY(0) + 32;
+  tft_.fillCircle(x + 8, y + 8, 6, color);
+  tft_.setTextFont(2);
+  tft_.setTextSize(1);
+  tft_.setTextColor(TFT_WHITE);
+  tft_.drawString(tft_.textWidth(label, 2) <= kValueWidth - 21 ? label : "STALE", x + 21, y);
+  strncpy(cached_values_[0], key, sizeof(cached_values_[0]) - 1);
+  cached_values_[0][sizeof(cached_values_[0]) - 1] = 0;
+}
+
 void DisplayManager::updateDashboard() {
   const uint32_t started_us = micros();
   if (first_dashboard_update_) {
@@ -526,7 +564,7 @@ void DisplayManager::updateDashboard() {
                   tft_.getSwapBytes() ? "on" : "off");
   }
   char value[32];
-  drawValue(0, ESP.getChipModel());
+  drawBoilerValue();
   const uint32_t elapsed_s = millis() / 1000U;
   snprintf(value, sizeof(value), "%lud %02lu:%02lu:%02lu", static_cast<unsigned long>(elapsed_s / 86400U),
            static_cast<unsigned long>((elapsed_s / 3600U) % 24U),
