@@ -54,3 +54,8 @@ background and cards on hardware before Wi-Fi was added. Wi-Fi provisioning,
 portal behavior, and the small status overlay require the physical checks in
 [Wi-Fi setup](docs/wifi-setup.md#physical-verification-checklist); successful
 builds do not establish hardware behavior.
+
+# Local secure WebSocket server
+
+The opt-in, read-only ESP32-S3 local WSS endpoint and isolated development
+procedure are documented in [docs/LOCAL_WSS.md](docs/LOCAL_WSS.md).

@@ -214,18 +214,23 @@ void NatureNetworkManager::startConnection(uint32_t now) {
 void NatureNetworkManager::startPortal() {
   if (snapshot().ap_active) return;
   stopOta();  // ArduinoOTA's UDP listener otherwise accepts AP clients too.
+  // Publish the AP transition before enabling the radio so the WSS route
+  // rejects upgrades through the setup interface throughout startup.
+  portENTER_CRITICAL(&snapshot_lock_);
+  snapshot_.ap_active = true;
+  portEXIT_CRITICAL(&snapshot_lock_);
   WiFi.mode(WIFI_AP_STA);
   if (!WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                          IPAddress(255, 255, 255, 0)) ||
       !WiFi.softAP("NatureGlass-Setup", ap_password_, 1, false, 1)) {
+    portENTER_CRITICAL(&snapshot_lock_);
+    snapshot_.ap_active = false;
+    portEXIT_CRITICAL(&snapshot_lock_);
     Serial.println("Wi-Fi: protected setup AP failed");
     next_ap_attempt_ms_ = millis() + 30000U;
     if (!has_saved_) setState(State::Error);
     return;
   }
-  portENTER_CRITICAL(&snapshot_lock_);
-  snapshot_.ap_active = true;
-  portEXIT_CRITICAL(&snapshot_lock_);
   if (!portal_configured_) configurePortal();
   dns_.start(53, "*", WiFi.softAPIP());
   server_.begin();
