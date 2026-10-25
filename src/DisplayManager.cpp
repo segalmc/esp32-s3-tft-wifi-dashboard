@@ -7,49 +7,20 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <new>
 
 #ifndef LOAD_FONT2
 #error "Nature Glass values require TFT_eSPI font 2"
 #endif
 
-#ifndef NATURE_GLASS_DIAGNOSTICS
-#define NATURE_GLASS_DIAGNOSTICS 0
-#endif
-
 namespace {
-constexpr uint16_t kColors[] = {TFT_RED, TFT_GREEN, TFT_BLUE, TFT_WHITE, TFT_BLACK};
-constexpr const char* kPhaseNames[] = {"red", "green", "blue", "white", "black", "graphics"};
-constexpr const char* kLabels[] = {"BOILER", "UPTIME", "FREE HEAP", "PSRAM TOTAL",
-                                   "PSRAM FREE", "FLASH", "RESOLUTION", "REFRESH"};
-constexpr uint32_t kPhaseDurationMs = 1500;
 constexpr uint32_t kDashboardIntervalMs = 1000;
+constexpr uint32_t kChartRedrawIntervalMs = 15000;
 constexpr uint16_t kNavy = 0x08C9;
 constexpr uint16_t kTurquoise = 0x4EBA;
 constexpr uint16_t kOrange = 0xFD2C;
-constexpr int16_t kValueWidth = 120;
-constexpr int16_t kValueHeight = 20;
-static_assert(sizeof(kBackgroundPixels) == 320U * 480U * 2U,
-              "RGB565 asset must contain exactly 320 x 480 pixels");
-static_assert(kBackgroundWidth % 2 == 0 && kValueWidth % 2 == 0,
-              "pushImage row and restore widths must be even");
-#if NATURE_GLASS_DIAGNOSTICS
-constexpr uint32_t kDiagnosticDurationMs = 5000;
 static_assert(sizeof(kPhotoOnlyPixels) == 320U * 480U * 2U,
-              "Photo diagnostic must contain exactly 320 x 480 pixels");
-#define TEST_ROW(a, b) a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b,b
-#define TEST_EIGHT(a, b) TEST_ROW(a,b),TEST_ROW(a,b),TEST_ROW(a,b),TEST_ROW(a,b),TEST_ROW(a,b),TEST_ROW(a,b),TEST_ROW(a,b),TEST_ROW(a,b)
-alignas(4) const uint16_t kKnownImage[32 * 32] PROGMEM = {
-    TEST_EIGHT(TFT_RED, TFT_GREEN), TEST_EIGHT(TFT_RED, TFT_GREEN),
-    TEST_EIGHT(TFT_BLUE, TFT_WHITE), TEST_EIGHT(TFT_BLUE, TFT_WHITE)};
-#undef TEST_EIGHT
-#undef TEST_ROW
-#endif
-constexpr int16_t cardX(uint8_t index) { return 12 + (index % 2) * 153; }
-constexpr int16_t cardY(uint8_t index) { return 188 + (index / 2) * 67; }
-constexpr int16_t valueX(uint8_t index) { return (cardX(index) + 13) & ~1; }
-static_assert(valueX(0) >= cardX(0) && valueX(0) + kValueWidth <= cardX(0) + 144 &&
-              cardY(0) + 32 >= cardY(0) && cardY(0) + 32 + kValueHeight <= cardY(0) + 59,
-              "Boiler redraw must stay inside Nature Glass card 0");
+              "Scenic RGB565 asset must contain exactly 320 x 480 pixels");
 uint32_t assetChecksum(const uint16_t* pixels) {
   uint32_t checksum = 0;
   for (size_t i = 0; i < kBackgroundWidth * kBackgroundHeight; ++i) {
@@ -62,13 +33,17 @@ uint32_t assetChecksum(const uint16_t* pixels) {
 
 void DisplayManager::begin() {
 #if TFT_HARDWARE_ENABLED
+  void* memory = ps_malloc(sizeof(TemperatureHistory));
+  if (memory) history_ = new (memory) TemperatureHistory();
+  else Serial.println("TFT: 24-hour chart PSRAM unavailable");
   Serial.printf("TFT: initializing ST7796S at 10 MHz, rotation %d\n", TFT_ROTATION);
   tft_.init();
   tft_.setRotation(TFT_ROTATION);
   Serial.printf("TFT: init commands sent; no readback (MISO disconnected). %d x %d\n",
                 tft_.width(), tft_.height());
-  showPhase();
-  phase_started_ms_ = millis();
+  Serial.println("TFT: permanent dashboard started");
+  drawDashboardFrame();
+  last_dashboard_ms_ = millis() - kDashboardIntervalMs;
 #else
   Serial.println("TFT: hardware disabled; SPI and TFT GPIOs untouched");
 #endif
@@ -76,124 +51,23 @@ void DisplayManager::begin() {
 
 void DisplayManager::update(uint32_t now_ms) {
 #if TFT_HARDWARE_ENABLED
-  if (phase_ < 6) {
-    if (static_cast<uint32_t>(now_ms - phase_started_ms_) < kPhaseDurationMs) return;
-    ++phase_;
-    phase_started_ms_ = now_ms;
-    if (phase_ < 6) {
-      showPhase();
-      return;
-    }
-#if NATURE_GLASS_DIAGNOSTICS
-    diagnostic_stage_ = 0;
-    showDiagnosticStage(0);
-    return;
-#else
-    Serial.println("TFT: dashboard started");
-    drawDashboardFrame();
-    last_dashboard_ms_ = now_ms - kDashboardIntervalMs;
-#endif
-  }
-
-#if NATURE_GLASS_DIAGNOSTICS
-  if (diagnostic_stage_ < 4) {
-    if (static_cast<uint32_t>(now_ms - phase_started_ms_) < kDiagnosticDurationMs) return;
-    ++diagnostic_stage_;
-    phase_started_ms_ = now_ms;
-    if (diagnostic_stage_ < 4) {
-      showDiagnosticStage(diagnostic_stage_);
-      return;
-    }
-    Serial.println("TFT: dashboard started after image diagnostics");
-    drawDashboardFrame();
-    last_dashboard_ms_ = now_ms - kDashboardIntervalMs;
-  }
-#endif
-
   if (static_cast<uint32_t>(now_ms - last_dashboard_ms_) < kDashboardIntervalMs) return;
   last_dashboard_ms_ = now_ms;
-  updateDashboard();
+  const time_t now = time(nullptr);
+  const int64_t minute = now >= 1700000000 ? now / 60 : -1;
+  if (minute != chart_minute_) { chart_minute_ = minute; chart_dirty_ = true; }
+  const uint32_t redraw_started = micros();
+  const bool draw_chart = chart_dirty_ &&
+      (first_chart_refresh_ || now_ms - last_chart_draw_ms_ >= kChartRedrawIntervalMs);
+  drawTelemetryPage(draw_chart);
+  last_refresh_us_ = micros() - redraw_started;
+  if (draw_chart) { chart_dirty_ = false; last_chart_draw_ms_ = now_ms; }
 #else
   (void)now_ms;
 #endif
 }
 
 #if TFT_HARDWARE_ENABLED
-void DisplayManager::showPhase() {
-  Serial.printf("TFT test: %s\n", kPhaseNames[phase_]);
-  if (phase_ < 5) tft_.fillScreen(kColors[phase_]);
-  else drawGraphics();
-}
-
-void DisplayManager::drawGraphics() {
-  tft_.fillScreen(TFT_BLACK);
-  const int16_t w = tft_.width();
-  const int16_t h = tft_.height();
-  tft_.drawLine(12, 12, w - 13, h - 13, TFT_YELLOW);
-  tft_.drawLine(w - 13, 12, 12, h - 13, TFT_CYAN);
-  tft_.drawRect(25, 40, w - 50, h - 80, TFT_GREEN);
-  tft_.fillCircle(w / 2, h / 2, 30, TFT_MAGENTA);
-  tft_.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft_.setTextSize(2);
-  tft_.drawString("ESP32-S3 READY", 25, 15);
-  tft_.setTextColor(TFT_YELLOW, TFT_BLACK);
-  tft_.drawString("ST7796S", 25, h - 34);
-}
-
-#if NATURE_GLASS_DIAGNOSTICS
-void DisplayManager::showDiagnosticStage(uint8_t stage) {
-  if (stage == 0 || stage == 1) {
-    tft_.setSwapBytes(true);
-    const bool photo_only = stage == 0;
-    Serial.printf("TFT image diagnostic %u/4: %s, 320x480 single pushImage\n",
-                  static_cast<unsigned>(stage + 1),
-                  photo_only ? "photo only" : "photo plus glass cards");
-    const uint16_t* pixels = photo_only ? kPhotoOnlyPixels : kBackgroundPixels;
-    const uint32_t expected = photo_only ? kPhotoOnlyChecksum : kBackgroundChecksum;
-    Serial.printf("TFT image diagnostic: asset checksum %s\n",
-                  assetChecksum(pixels) == expected ? "OK" : "FAILED");
-    const uint32_t started_us = micros();
-    tft_.pushImage(0, 0, kBackgroundWidth, kBackgroundHeight,
-                   pixels);
-    Serial.printf("TFT image diagnostic: draw=%lu us\n",
-                  static_cast<unsigned long>(micros() - started_us));
-    return;
-  }
-  tft_.fillScreen(TFT_BLACK);
-  tft_.setTextFont(2);
-  tft_.setTextSize(1);
-  tft_.setTextColor(TFT_WHITE);
-  if (stage == 2) {
-    Serial.println("TFT image diagnostic 3/4: fillRect RGB565 reference blocks");
-    tft_.drawString("RGB565 FILL REFERENCE", 20, 25);
-    const uint16_t colors[] = {TFT_RED, TFT_GREEN, TFT_BLUE, TFT_WHITE};
-    const char* names[] = {"RED", "GREEN", "BLUE", "WHITE"};
-    for (uint8_t i = 0; i < 4; ++i) {
-      const int16_t x = 17 + i * 76;
-      tft_.fillRect(x, 125, 58, 96, colors[i]);
-      tft_.drawString(names[i], x, 237);
-    }
-    tft_.drawString("No pushImage used", 20, 305);
-  } else {
-    Serial.println("TFT image diagnostic 4/4: same flash image, swap off at left / on at right");
-    tft_.drawString("FLASH IMAGE BYTE ORDER", 20, 25);
-    tft_.drawString("SWAP OFF", 31, 100);
-    tft_.drawString("SWAP ON", 190, 100);
-    for (uint8_t side = 0; side < 2; ++side) {
-      tft_.setSwapBytes(side == 1);
-      const int16_t x = side == 0 ? 32 : 191;
-      for (uint8_t ty = 0; ty < 3; ++ty) {
-        for (uint8_t tx = 0; tx < 3; ++tx) {
-          tft_.pushImage(x + tx * 32, 150 + ty * 32, 32, 32, kKnownImage);
-        }
-      }
-    }
-    tft_.drawString("Expected: red/green above blue/white", 15, 300);
-    tft_.setSwapBytes(true);
-  }
-}
-#endif
-
 void DisplayManager::drawDashboardFrame() {
   const uint32_t started_us = micros();
   // The generated C array contains native RGB565 words. TFT_eSPI's ESP32-S3
@@ -203,43 +77,44 @@ void DisplayManager::drawDashboardFrame() {
   background_ready_ = tft_.width() == kBackgroundWidth &&
                       tft_.height() == kBackgroundHeight;
   if (background_ready_) {
-    background_ready_ = assetChecksum(kBackgroundPixels) == kBackgroundChecksum;
+    background_ready_ = assetChecksum(kPhotoOnlyPixels) == kPhotoOnlyChecksum;
   }
   if (background_ready_) {
     // One window and one library image call. Its const overload copies one
     // flash row at a time to a small stack buffer before transmitting it.
     tft_.pushImage(0, 0, kBackgroundWidth, kBackgroundHeight,
-                   kBackgroundPixels);
+                   kPhotoOnlyPixels);
   } else {
-    Serial.println("TFT: background unavailable; using solid glass cards");
+    Serial.println("TFT: scenic image unavailable; using solid background");
     tft_.fillScreen(kNavy);
-    tft_.fillRoundRect(12, 12, 296, 66, 14, 0x11E8);
-    for (uint8_t row = 0; row < 8; ++row) {
-      tft_.fillRoundRect(cardX(row), cardY(row), 144, 59, 12, 0x11E8);
-      tft_.drawRoundRect(cardX(row), cardY(row), 144, 59, 12, kTurquoise);
-      tft_.drawFastHLine(cardX(row) + 13, cardY(row) + 13, 18, kTurquoise);
-    }
   }
 
-  tft_.setTextFont(1);
-  tft_.setTextSize(1);
-  tft_.setTextColor(kTurquoise);
-  tft_.drawString("SYSTEM / FIELD NOTES", 25, 22);
-  tft_.setTextFont(2);
-  tft_.setTextSize(2);
-  tft_.setTextColor(TFT_WHITE);
-  tft_.drawString("ESP32-S3", 24, 42);
-  tft_.setTextSize(1);
-  tft_.setTextFont(1);
-  tft_.setTextColor(TFT_WHITE);
-  tft_.drawString("DEVICE DIAGNOSTICS", 18, 164);
-  tft_.setTextColor(kOrange);
-  tft_.drawString("MOUNTAIN LAKE  /  SYSTEM HEALTH", 25, 455);
-  for (uint8_t row = 0; row < 8; ++row) {
-    tft_.setTextColor(kTurquoise);
-    tft_.drawString(kLabels[row], cardX(row) + 13, cardY(row) + 18);
-    cached_values_[row][0] = '\0';
-  }
+  // The scenic image stays in flash and is sent only once at startup. Small
+  // opaque panels make every later update independent of the source image.
+  tft_.fillRoundRect(8, 8, 304, 46, 8, kNavy);
+  tft_.fillRoundRect(8, 61, 149, 87, 8, kNavy);
+  tft_.fillRoundRect(163, 61, 149, 87, 8, kNavy);
+  tft_.fillRoundRect(8, 154, 304, 53, 8, kNavy);
+  tft_.fillRoundRect(8, 213, 149, 55, 8, kNavy);
+  tft_.fillRoundRect(163, 213, 149, 55, 8, kNavy);
+  tft_.fillRoundRect(8, 274, 304, 34, 8, kNavy);
+  tft_.fillRoundRect(8, 314, 304, 112, 8, kNavy);
+  tft_.fillRoundRect(8, 432, 304, 40, 8, kNavy);
+  tft_.setTextFont(2); tft_.setTextSize(1); tft_.setTextColor(TFT_WHITE, kNavy);
+  tft_.drawString("HOT WATER CONTROL", 16, 14);
+  tft_.setTextColor(kTurquoise, kNavy);
+  tft_.drawString("BOILER TEMP", 16, 65);
+  tft_.drawString("SOLAR TEMP", 171, 65);
+  tft_.drawString("BOILER SWITCH (TUYA)", 16, 158);
+  tft_.drawString("VALVE", 16, 218);
+  tft_.drawString("MODE", 171, 218);
+  tft_.drawString("TEMPERATURE / LAST 24 HOURS", 16, 317);
+  tft_.setTextFont(1); tft_.drawString("ESP32-S3", 14, 436);
+  tft_.drawString("BOILER ESP32", 116, 436);
+  tft_.drawString("TUYA / UPTIME", 225, 436);
+  memset(telemetry_lines_, 0, sizeof(telemetry_lines_));
+  first_chart_refresh_ = true;
+  chart_dirty_ = true;
   Serial.printf("TFT: frame=%lu us, heap=%lu B, PSRAM=%lu/%lu B, photo=%s\n",
                 static_cast<unsigned long>(micros() - started_us), static_cast<unsigned long>(ESP.getFreeHeap()),
                 static_cast<unsigned long>(ESP.getFreePsram()), static_cast<unsigned long>(ESP.getPsramSize()),
@@ -247,19 +122,12 @@ void DisplayManager::drawDashboardFrame() {
   dashboard_ready_ = true;
 }
 
-void DisplayManager::drawNetworkStatus() {
-  // Restore only this even-width header region from the proven RGB565 path.
-  if (background_ready_) streamAssetRegion(kBackgroundPixels, 194, 47, 110, 22);
-  else tft_.fillRect(194, 47, 110, 22, 0x11E8);
-  tft_.fillRoundRect(196, 48, 106, 19, 6, kNavy);
-  tft_.setTextFont(1);
-  tft_.setTextSize(1);
-  tft_.setTextColor(kTurquoise);
-  tft_.drawString(network_status_, 202, 54);
-  network_status_dirty_ = false;
-}
-
 void DisplayManager::drawSetupPanel(bool visible) {
+  if (!visible) {
+    setup_panel_visible_ = false;
+    drawDashboardFrame();
+    return;
+  }
   restoreTopPanelRegion();
   if (visible) {
     tft_.fillRoundRect(22, 91, 276, 58, 10, kNavy);
@@ -276,68 +144,15 @@ void DisplayManager::drawSetupPanel(bool visible) {
     tft_.drawString("RECORD THIS PASSWORD", 31, 138);
   }
   setup_panel_visible_ = visible;
-  clock_visible_ = false;
-  clock_dirty_ = true;
 }
 
 void DisplayManager::restoreTopPanelRegion() {
   // This is the same even-width photo region used by the temporary AP panel.
-  if (background_ready_) streamAssetRegion(kBackgroundPixels, 20, 90, 280, 60);
+  if (background_ready_) streamAssetRegion(kPhotoOnlyPixels, 20, 90, 280, 60);
   else tft_.fillRect(20, 90, 280, 60, kNavy);
 }
 
-void DisplayManager::drawClockPanel(const char* time_text, const char* weekday,
-                                    const char* date_text) {
-  restoreTopPanelRegion();
-  tft_.fillRoundRect(22, 91, 276, 58, 10, kNavy);
-  tft_.drawRoundRect(22, 91, 276, 58, 10, kTurquoise);
-  tft_.setTextFont(2);
-  tft_.setTextSize(2);
-  tft_.setTextColor(TFT_WHITE);
-  tft_.drawString(time_text, 31, 94);
-  tft_.setTextSize(1);
-  tft_.setTextColor(kTurquoise);
-  tft_.drawString(weekday, 31, 129);
-  const int16_t separator_x = 31 + tft_.textWidth(weekday, 2) + 9;
-  tft_.fillCircle(separator_x, 137, 2, kOrange);
-  tft_.setTextColor(TFT_WHITE);
-  tft_.drawString(date_text, separator_x + 9, 129);
-  clock_visible_ = true;
-  clock_dirty_ = false;
-}
-
-void DisplayManager::updateClock(bool ntp_synced, uint32_t now_ms) {
-  if (ntp_synced) clock_was_synced_ = true;
-  if (!dashboard_ready_ || !clock_was_synced_ || setup_panel_visible_ ||
-      ota_panel_visible_) return;
-  // Sample once a second; HH:mm only needs a redraw when the minute or date changes.
-  if (!clock_dirty_ && static_cast<uint32_t>(now_ms - last_clock_sample_ms_) < 1000U) return;
-  last_clock_sample_ms_ = now_ms;
-  const time_t epoch = time(nullptr);
-  struct tm local = {};
-  if (!localtime_r(&epoch, &local) || local.tm_year < 124 || local.tm_year >= 200 ||
-      local.tm_wday < 0 || local.tm_wday > 6) {
-    if (clock_visible_ || clock_dirty_) restoreTopPanelRegion();
-    clock_visible_ = false;
-    clock_dirty_ = false;
-    cached_clock_time_[0] = '\0';
-    return;
-  }
-  constexpr const char* kWeekdays[] = {"Sunday", "Monday", "Tuesday", "Wednesday",
-                                       "Thursday", "Friday", "Saturday"};
-  char time_text[6];
-  char date_text[16];
-  snprintf(time_text, sizeof(time_text), "%02d:%02d", local.tm_hour, local.tm_min);
-  if (strftime(date_text, sizeof(date_text), "%d/%m/%Y", &local) == 0) return;
-  if (clock_dirty_ || strcmp(cached_clock_time_, time_text) != 0 ||
-      strcmp(cached_clock_date_, date_text) != 0 || cached_weekday_ != local.tm_wday) {
-    drawClockPanel(time_text, kWeekdays[local.tm_wday], date_text);
-    memcpy(cached_clock_time_, time_text, sizeof(time_text));
-    strncpy(cached_clock_date_, date_text, sizeof(cached_clock_date_) - 1);
-    cached_clock_date_[sizeof(cached_clock_date_) - 1] = '\0';
-    cached_weekday_ = static_cast<uint8_t>(local.tm_wday);
-  }
-}
+void DisplayManager::updateClock(bool, uint32_t) {}
 
 void DisplayManager::updateNetwork(const char* status, bool ap_active,
                                    bool initial_setup, const char* ap_password,
@@ -345,10 +160,8 @@ void DisplayManager::updateNetwork(const char* status, bool ap_active,
   if (strncmp(network_status_, status, sizeof(network_status_)) != 0) {
     strncpy(network_status_, status, sizeof(network_status_) - 1);
     network_status_[sizeof(network_status_) - 1] = '\0';
-    network_status_dirty_ = true;
   }
   if (!dashboard_ready_) return;
-  if (network_status_dirty_) drawNetworkStatus();
   if (ap_active && ap_password && ap_password[0]) {
     memcpy(setup_password_, ap_password, sizeof(setup_password_));
     if (initial_setup && !initial_password_shown_) {
@@ -362,12 +175,6 @@ void DisplayManager::updateNetwork(const char* status, bool ap_active,
   if (visible != setup_panel_visible_) {
     if (ota_panel_visible_) {
       setup_panel_visible_ = visible;
-      clock_dirty_ = true;
-    } else if (!visible && clock_was_synced_) {
-      // updateClock runs next in this loop and replaces the password directly.
-      setup_panel_visible_ = false;
-      clock_visible_ = false;
-      clock_dirty_ = true;
     } else {
       drawSetupPanel(visible);
     }
@@ -414,8 +221,6 @@ void DisplayManager::drawOtaPanel(NatureNetworkManager::OtaPhase phase, uint8_t 
     tft_.drawRoundRect(31, 123, 258, 14, 4, kTurquoise);
     tft_.fillRect(34, 126, percent * 252 / 100, 8, kTurquoise);
   }
-  clock_visible_ = false;
-  clock_dirty_ = true;
 }
 
 void DisplayManager::updateOta(NatureNetworkManager::OtaSnapshot ota, const char* password,
@@ -449,8 +254,7 @@ void DisplayManager::updateOta(NatureNetworkManager::OtaSnapshot ota, const char
       memset(ota_password_, 0, sizeof(ota_password_));
       ota_reveal_until_ms_ = 0;
       if (setup_panel_visible_) drawSetupPanel(true);
-      else restoreTopPanelRegion();
-      clock_dirty_ = true;
+      else drawDashboardFrame();
     }
     return;
   }
@@ -486,107 +290,158 @@ void DisplayManager::streamAssetRegion(const uint16_t* pixels, int16_t x,
   tft_.endWrite();
 }
 
-void DisplayManager::restoreValueRegion(uint8_t row) {
-  const int16_t x = valueX(row);
-  const int16_t y = cardY(row) + 32;
-  if (background_ready_) {
-    streamAssetRegion(kBackgroundPixels, x, y, kValueWidth, kValueHeight);
-  } else {
-    tft_.fillRect(x, y, kValueWidth, kValueHeight, 0x11E8);
-  }
-}
-
-void DisplayManager::drawValue(uint8_t row, const char* value) {
-  if (strcmp(cached_values_[row], value) == 0) {
-    if (first_dashboard_update_) {
-      Serial.printf("TFT value %u unchanged unexpectedly: '%s'\n",
-                    static_cast<unsigned>(row), value);
-    }
-    return;
-  }
-  restoreValueRegion(row);
-  tft_.setTextFont(2);
-  tft_.setTextSize(1);
-  tft_.setTextColor(TFT_WHITE);
-  const int16_t x = valueX(row);
-  const int16_t y = cardY(row) + 32;
-  const int16_t drawn_width = tft_.drawString(value, x, y);
-  if (first_dashboard_update_) {
-    Serial.printf("TFT value %u: '%s' at (%d,%d), drawn_width=%d, font2=%s\n",
-                  static_cast<unsigned>(row), value, x, y, drawn_width,
-                  (tft_.fontsLoaded() & 0x0004) ? "loaded" : "MISSING");
-  }
-  strncpy(cached_values_[row], value, sizeof(cached_values_[row]) - 1);
-  cached_values_[row][sizeof(cached_values_[row]) - 1] = '\0';
-}
-
 void DisplayManager::updateBoiler(TuyaControl::Snapshot state) {
   boiler_state_ = state;
-  // The main loop receives authenticated push state on its next pass. Redraw
-  // only card 0 when its displayed value changes, without waiting for the
-  // once-per-second refresh of the other seven cards.
-  if (dashboard_ready_) drawBoilerValue();
 }
 
-void DisplayManager::drawBoilerValue() {
-  const auto& state = boiler_state_;
-  const bool stale = !state.connected ||
-      static_cast<uint32_t>(millis() - state.last_confirmed_ms) > 45000U;
-  const bool uncertain = state.progress == TuyaControl::Progress::Uncertain ||
-                         state.progress == TuyaControl::Progress::Pending ||
-                         state.progress == TuyaControl::Progress::Sending ||
-                         state.progress == TuyaControl::Progress::Verifying;
-  const char* label = state.relay == TuyaControl::Relay::On ? (stale ? "ON STALE" : "ON") :
-                      state.relay == TuyaControl::Relay::Off ? (stale ? "OFF STALE" : "OFF") : "UNKNOWN";
-  const uint16_t color = uncertain ? kOrange : stale ? TFT_RED :
-                         state.relay == TuyaControl::Relay::On ? TFT_GREEN : 0x8410;
-  char key[32];
-  snprintf(key, sizeof(key), "%s:%u", label, static_cast<unsigned>(color));
-  if (strcmp(cached_values_[0], key) == 0) return;
-  restoreValueRegion(0);
-  const int16_t x = valueX(0);
-  const int16_t y = cardY(0) + 32;
-  tft_.fillCircle(x + 8, y + 8, 6, color);
-  tft_.setTextFont(2);
-  tft_.setTextSize(1);
-  tft_.setTextColor(TFT_WHITE);
-  tft_.drawString(tft_.textWidth(label, 2) <= kValueWidth - 21 ? label : "STALE", x + 21, y);
-  strncpy(cached_values_[0], key, sizeof(cached_values_[0]) - 1);
-  cached_values_[0][sizeof(cached_values_[0]) - 1] = 0;
-}
-
-void DisplayManager::updateDashboard() {
-  const uint32_t started_us = micros();
-  if (first_dashboard_update_) {
-    Serial.printf("TFT: first dashboard update; font mask=0x%04X, swap=%s\n",
-                  static_cast<unsigned>(tft_.fontsLoaded()),
-                  tft_.getSwapBytes() ? "on" : "off");
+void DisplayManager::updateTelemetry(LocalWssServer::Telemetry state) {
+  if (!state.snapshot_ok) return;
+  telemetry_state_ = state;
+  const time_t now = time(nullptr);
+  if (history_ && now != last_history_expire_second_) {
+    history_->expire(now);
+    last_history_expire_second_ = now;
   }
-  char value[32];
-  drawBoilerValue();
-  const uint32_t elapsed_s = millis() / 1000U;
-  snprintf(value, sizeof(value), "%lud %02lu:%02lu:%02lu", static_cast<unsigned long>(elapsed_s / 86400U),
-           static_cast<unsigned long>((elapsed_s / 3600U) % 24U),
-           static_cast<unsigned long>((elapsed_s / 60U) % 60U),
-           static_cast<unsigned long>(elapsed_s % 60U));
-  drawValue(1, value);
-  snprintf(value, sizeof(value), "%lu KiB", static_cast<unsigned long>(ESP.getFreeHeap()) / 1024U);
-  drawValue(2, value);
-  snprintf(value, sizeof(value), "%lu MiB", static_cast<unsigned long>(ESP.getPsramSize()) / 1048576U);
-  drawValue(3, value);
-  snprintf(value, sizeof(value), "%lu KiB", static_cast<unsigned long>(ESP.getFreePsram()) / 1024U);
-  drawValue(4, value);
-  snprintf(value, sizeof(value), "%lu MiB", static_cast<unsigned long>(ESP.getFlashChipSize()) / 1048576U);
-  drawValue(5, value);
-  snprintf(value, sizeof(value), "%dx%d", tft_.width(), tft_.height());
-  drawValue(6, value);
-  const uint32_t refresh_us = micros() - started_us;
-  last_refresh_us_ = refresh_us;
-  snprintf(value, sizeof(value), "%lu us", static_cast<unsigned long>(refresh_us));
-  drawValue(7, value);
-  Serial.printf("TFT dashboard: heap=%lu B, PSRAM=%lu/%lu B, refresh=%lu us\n",
-                static_cast<unsigned long>(ESP.getFreeHeap()), static_cast<unsigned long>(ESP.getFreePsram()), static_cast<unsigned long>(ESP.getPsramSize()),
-                static_cast<unsigned long>(refresh_us));
-  first_dashboard_update_ = false;
+  if (!history_ || !state.valid || !state.observed_epoch) return;
+  if (strcmp(last_telemetry_session_, state.device_session_id) == 0 &&
+      last_telemetry_sequence_ == state.sequence) return;
+  strncpy(last_telemetry_session_, state.device_session_id,
+          sizeof(last_telemetry_session_) - 1);
+  last_telemetry_sequence_ = state.sequence;
+  if (history_->add(state.observed_epoch, now, state.boiler_c,
+                    state.solar_c, !state.stale && strcmp(state.quality, "reported") == 0))
+    chart_dirty_ = true;
 }
+
+void DisplayManager::drawTelemetryPage(bool chart) {
+  const auto& state = telemetry_state_;
+  const bool stale = !state.valid || state.stale || !state.connected;
+  char label[64];
+  auto line = [&](unsigned index, const char* value, int x, int y, int width,
+                  int height, uint16_t color, uint8_t font) {
+    if (strcmp(telemetry_lines_[index], value) == 0) return;
+    tft_.fillRect(x, y, width, height, kNavy);
+    tft_.setTextFont(font == 4 ? 2 : font);
+    tft_.setTextSize(font == 4 ? 2 : 1);
+    tft_.setTextColor(color, kNavy);
+    tft_.drawString(value, x, y);
+    strlcpy(telemetry_lines_[index], value, sizeof(telemetry_lines_[index]));
+  };
+  time_t now = time(nullptr);
+  struct tm local = {};
+  char clock[8] = "--:--";
+  if (now >= 1700000000 && localtime_r(&now, &local))
+    snprintf(clock, sizeof(clock), "%02d:%02d", local.tm_hour, local.tm_min);
+  snprintf(label, sizeof(label), "%s  WSS %s  %s", network_status_,
+           state.connected ? "LIVE" : "OFF", clock);
+  line(0, label, 16, 35, 288, 16, state.connected ? TFT_GREEN : kOrange, 2);
+  if (!setup_panel_visible_ && !ota_panel_visible_) {
+    if (!stale && isfinite(state.boiler_c)) snprintf(label, sizeof(label), "%.1f C", state.boiler_c);
+    else strlcpy(label, "--.- C", sizeof(label));
+    line(1, label, 16, 92, 135, 32, kOrange, 4);
+    if (!stale && isfinite(state.solar_c)) snprintf(label, sizeof(label), "%.1f C", state.solar_c);
+    else strlcpy(label, "--.- C", sizeof(label));
+    line(2, label, 171, 92, 135, 32, TFT_CYAN, 4);
+  }
+  const char* relay = boiler_state_.relay == TuyaControl::Relay::On ? "ON" :
+                      boiler_state_.relay == TuyaControl::Relay::Off ? "OFF" : "UNKNOWN";
+  snprintf(label, sizeof(label), "%s / %s", relay,
+           boiler_state_.connected ? "ONLINE" : "OFFLINE");
+  line(3, label, 16, 180, 288, 18, boiler_state_.connected ? TFT_GREEN : kOrange, 2);
+  if (boiler_state_.lease_active)
+    snprintf(label, sizeof(label), "Auto off in %lu:%02lu",
+             static_cast<unsigned long>(boiler_state_.lease_remaining_s / 60),
+             static_cast<unsigned long>(boiler_state_.lease_remaining_s % 60));
+  else strlcpy(label, "Auto off: idle", sizeof(label));
+  line(4, label, 16, 198, 288, 10, TFT_WHITE, 1);
+  line(5, stale ? "UNKNOWN" : state.valve, 16, 240, 135, 22,
+       stale ? kOrange : TFT_GREEN, 2);
+  line(6, stale ? "UNKNOWN" : state.manual ? "MANUAL" : "AUTO", 171, 240,
+       135, 22, TFT_WHITE, 2);
+  snprintf(label, sizeof(label), "Last update: %s  /  WSS %s",
+           state.valid ? "received" : "none", state.connected ? "live" : "offline");
+  if (state.valid) snprintf(label, sizeof(label), "Last update %lus ago / WSS %s",
+      static_cast<unsigned long>((millis() - state.received_ms) / 1000),
+      state.connected ? "live" : "offline");
+  line(7, label, 16, 283, 288, 18, stale ? kOrange : TFT_GREEN, 2);
+  const IPAddress esp_ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP() : IPAddress();
+  snprintf(label, sizeof(label), "%u.%u.%u.%u", esp_ip[0], esp_ip[1], esp_ip[2], esp_ip[3]);
+  line(8, label, 14, 451, 100, 12, TFT_WHITE, 1);
+  line(9, state.peer_ip[0] ? state.peer_ip : "--", 116, 451, 106, 12, TFT_WHITE, 1);
+  snprintf(label, sizeof(label), "%s %luh%02lum", boiler_state_.connected ? "ON" : "OFF",
+           static_cast<unsigned long>(millis() / 3600000U),
+           static_cast<unsigned long>((millis() / 60000U) % 60U));
+  line(10, label, 225, 451, 81, 12, boiler_state_.connected ? TFT_GREEN : kOrange, 1);
+  first_chart_refresh_ = false;
+  if (!chart) return;
+  tft_.fillRect(14, 335, 292, 88, kNavy);
+  tft_.setTextFont(1); tft_.setTextSize(1); tft_.setTextColor(TFT_WHITE, kNavy);
+  if (!history_ || chart_minute_ < 0) {
+    tft_.drawString("Waiting for trusted time and samples", 20, 365);
+    return;
+  }
+  constexpr int x0 = 38, width = 262, top = 344, height = 60;
+  float low = 150, high = -50;
+  const int64_t first = (chart_minute_ * 60 - 86400 + 59) / 60;
+  for (int64_t minute = first; minute <= chart_minute_; ++minute) {
+    auto b = history_->at(minute);
+    if (b.minute < 0) continue;
+    low = min(low, min(b.boiler_min, b.solar_min));
+    high = max(high, max(b.boiler_max, b.solar_max));
+  }
+  if (high < low) { tft_.drawString("No fresh samples", 18, 325); return; }
+  low = floorf((low - 2) / 10) * 10;
+  high = ceilf((high + 2) / 10) * 10;
+  if (high - low < 10) high = low + 10;
+  tft_.drawRect(x0, top, width, height, 0x8410);
+  char axis[20];
+  snprintf(axis, sizeof(axis), "%.0f C", high); tft_.drawString(axis, 2, top);
+  snprintf(axis, sizeof(axis), "%.0f C", low); tft_.drawString(axis, 2, top + height - 12);
+  auto y = [&](float value) { return top + height - 2 - static_cast<int>((value - low) * (height - 4) / (high - low)); };
+  int previous_boiler = -1, previous_solar = -1, previous_x = -1;
+  int64_t previous_last_minute = -1;
+  auto plot_run = [&](int x, int64_t run_first, int64_t run_last,
+                      float bmin, float bmax, float smin, float smax) {
+    const int px = x0 + x;
+    tft_.drawLine(px, y(bmin), px, y(bmax), TFT_ORANGE);
+    tft_.drawLine(px, y(smin), px, y(smax), TFT_CYAN);
+    const int boiler_y = y((bmin + bmax) / 2), solar_y = y((smin + smax) / 2);
+    if (previous_last_minute >= 0 && run_first == previous_last_minute + 1) {
+      tft_.drawLine(previous_x, previous_boiler, px, boiler_y, TFT_ORANGE);
+      tft_.drawLine(previous_x, previous_solar, px, solar_y, TFT_CYAN);
+    }
+    previous_x = px; previous_boiler = boiler_y; previous_solar = solar_y;
+    previous_last_minute = run_last;
+  };
+  for (int x = 0; x < width; ++x) {
+    const int64_t begin = first + static_cast<int64_t>(x) * 1440 / width;
+    const int64_t end = first + static_cast<int64_t>(x + 1) * 1440 / width;
+    float bmin = 151, bmax = -51, smin = 151, smax = -51;
+    int64_t run_first = -1, run_last = -1;
+    for (int64_t minute = begin; minute < end && minute <= chart_minute_; ++minute) {
+      const auto b = history_->at(minute);
+      if (b.minute < 0) {
+        if (run_first >= 0) plot_run(x, run_first, run_last, bmin, bmax, smin, smax);
+        run_first = -1; previous_last_minute = -1;
+        bmin = smin = 151; bmax = smax = -51;
+        continue;
+      }
+      if (run_first < 0) run_first = minute;
+      run_last = minute;
+      bmin = min(bmin, b.boiler_min); bmax = max(bmax, b.boiler_max);
+      smin = min(smin, b.solar_min); smax = max(smax, b.solar_max);
+    }
+    if (run_first >= 0) plot_run(x, run_first, run_last, bmin, bmax, smin, smax);
+  }
+  time_t left_time = first * 60, right_time = chart_minute_ * 60;
+  localtime_r(&left_time, &local); strftime(axis, sizeof(axis), "%H:%M", &local);
+  tft_.drawString(axis, x0, top + height + 4);
+  localtime_r(&right_time, &local); strftime(axis, sizeof(axis), "%H:%M", &local);
+  tft_.drawString(axis, x0 + width - 35, top + height + 4);
+  tft_.drawString("-24h", x0 + 39, top + height + 4);
+  tft_.drawString("now", x0 + width - 65, top + height + 4);
+  tft_.setTextColor(TFT_ORANGE, kNavy); tft_.drawString("Boiler", 132, 335);
+  tft_.setTextColor(TFT_CYAN, kNavy); tft_.drawString("Solar", 184, 335);
+}
+
 #endif

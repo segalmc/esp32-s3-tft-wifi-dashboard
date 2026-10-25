@@ -265,9 +265,12 @@ void LocalWssServer::begin(NatureNetworkManager* network) {
   if (!mutex_ || xTaskCreate(taskEntry, "local-wss", 6144, this, 1, &task_) != pdPASS)
     Serial.println("Local WSS: task unavailable");
 }
-void LocalWssServer::tlsError(void* context, esp_event_base_t, int32_t, void*) {
+void LocalWssServer::tlsError(void* context, esp_event_base_t, int32_t event_id, void*) {
   auto* self = static_cast<LocalWssServer*>(context);
-  self->tls_failures_.fetch_add(1, std::memory_order_relaxed);
+  const uint32_t count = self->tls_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
+  Serial.printf("Local WSS: TLS error event=%ld count=%lu at_ms=%lu\n",
+                static_cast<long>(event_id), static_cast<unsigned long>(count),
+                static_cast<unsigned long>(millis()));
 }
 void LocalWssServer::taskEntry(void* context) { static_cast<LocalWssServer*>(context)->run(); }
 bool LocalWssServer::configured() const {
@@ -296,8 +299,12 @@ bool LocalWssServer::allowed(IPAddress* ip) const {
 }
 LocalWssServer::Telemetry LocalWssServer::telemetry() const {
   Telemetry copy;
-  if (!mutex_ || xSemaphoreTake(mutex_, 0) != pdTRUE) return copy;
+  if (!mutex_ || xSemaphoreTake(mutex_, pdMS_TO_TICKS(5)) != pdTRUE) {
+    snapshot_misses_.fetch_add(1, std::memory_order_relaxed);
+    return copy;
+  }
   copy = telemetry_;
+  copy.snapshot_ok = true;
   copy.connected = phase_ == Phase::Ready;
   copy.stale = local_wss_policy::stale(copy.connected, copy.valid,
                                       copy.quality, millis(), copy.received_ms);
@@ -306,18 +313,27 @@ LocalWssServer::Telemetry LocalWssServer::telemetry() const {
 }
 void LocalWssServer::diagnostics() const {
   if (!mutex_ || xSemaphoreTake(mutex_, pdMS_TO_TICKS(20)) != pdTRUE) return;
-  Serial.printf("Local WSS: clients=%u auth_fail=%lu tls_error=%lu resets=%lu telemetry_accepted=%lu telemetry_rejected=%lu app_rejected=%lu age_ms=%lu heap=%lu min_heap=%lu psram=%lu manager_stack_free_B=%lu http_stack_free_B=%lu\n",
-      phase_ == Phase::Empty ? 0U : 1U, (unsigned long)auth_failures_,
+  const unsigned clients = phase_ == Phase::Empty ? 0U : 1U;
+  const uint32_t auth_failures = auth_failures_, resets = connection_resets_;
+  const uint32_t accepted = accepted_, rejected_telemetry = rejected_telemetry_;
+  const uint32_t rejected = rejected_;
+  const uint32_t age_ms = telemetry_.valid ? millis() - telemetry_.received_ms : 0;
+  const uint32_t http_stack = http_stack_free_bytes_, mutex_misses = mutex_misses_;
+  xSemaphoreGive(mutex_);
+  Serial.printf("Local WSS: clients=%u auth_fail=%lu tls_error=%lu resets=%lu telemetry_accepted=%lu telemetry_rejected=%lu app_rejected=%lu age_ms=%lu heap=%lu min_heap=%lu psram=%lu manager_stack_free_B=%lu http_stack_free_B=%lu mutex_miss=%lu snapshot_miss=%lu task_lag_max_ms=%lu ping_send_error=%lu\n",
+      clients, (unsigned long)auth_failures,
       (unsigned long)tls_failures_.load(std::memory_order_relaxed),
-      (unsigned long)connection_resets_,
-      (unsigned long)accepted_, (unsigned long)rejected_telemetry_,
-      (unsigned long)rejected_,
-      telemetry_.valid ? (unsigned long)(millis() - telemetry_.received_ms) : 0UL,
+      (unsigned long)resets,
+      (unsigned long)accepted, (unsigned long)rejected_telemetry,
+      (unsigned long)rejected,
+      (unsigned long)age_ms,
       (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMinFreeHeap(),
       (unsigned long)ESP.getFreePsram(),
       task_ ? (unsigned long)uxTaskGetStackHighWaterMark(task_) : 0UL,
-      (unsigned long)http_stack_free_bytes_);
-  xSemaphoreGive(mutex_);
+      (unsigned long)http_stack, (unsigned long)mutex_misses,
+      (unsigned long)snapshot_misses_.load(std::memory_order_relaxed),
+      (unsigned long)task_lag_max_ms_.load(std::memory_order_relaxed),
+      (unsigned long)ping_send_errors_.load(std::memory_order_relaxed));
 }
 void LocalWssServer::clearSession() {
   client_fd_ = -1; phase_ = Phase::Empty; phase_ms_ = 0; last_frame_ms_ = 0;
@@ -330,7 +346,12 @@ void LocalWssServer::clearSession() {
   telemetry_.connected = false;
   telemetry_.stale = true;
 }
-void LocalWssServer::closeClient() {
+void LocalWssServer::closeClient(const char* reason) {
+  Serial.printf("Local WSS: close reason=%s phase=%u fd=%d since_frame_ms=%lu since_ping_ms=%lu awaiting_pong=%u heap=%lu\n",
+      reason, static_cast<unsigned>(phase_), client_fd_,
+      static_cast<unsigned long>(millis() - last_frame_ms_),
+      static_cast<unsigned long>(millis() - last_ping_ms_), awaiting_pong_,
+      static_cast<unsigned long>(ESP.getFreeHeap()));
   if (server_ && client_fd_ >= 0) httpd_sess_trigger_close(server_, client_fd_);
   ++connection_resets_;
   clearSession();
@@ -345,7 +366,11 @@ void LocalWssServer::pingWork(void* context) {
   if (!send) return;
   httpd_ws_frame_t ping = {};
   ping.type = HTTPD_WS_TYPE_PING;
-  httpd_ws_send_frame_async(self->server_, fd, &ping);
+  const esp_err_t result = httpd_ws_send_frame_async(self->server_, fd, &ping);
+  if (result != ESP_OK) {
+    ++self->ping_send_errors_;
+    Serial.printf("Local WSS: ping send error=%ld fd=%d\n", static_cast<long>(result), fd);
+  }
 }
 void LocalWssServer::run() {
   if (!configured()) Serial.println("Local WSS: disabled; local TLS or device configuration missing/invalid");
@@ -356,10 +381,14 @@ void LocalWssServer::run() {
   uint32_t last_clock_ms = 0;
   bool had_clock_sync = false;
   bool tls_events_registered = false;
+  uint32_t previous_cycle_ms = 0;
   for (;;) {
     IPAddress ip;
     const time_t now_utc = time(nullptr);
     const uint32_t now_ms = millis();
+    if (previous_cycle_ms && now_ms - previous_cycle_ms > task_lag_max_ms_.load(std::memory_order_relaxed))
+      task_lag_max_ms_.store(now_ms - previous_cycle_ms, std::memory_order_relaxed);
+    previous_cycle_ms = now_ms;
     const bool synced = network_ && network_->snapshot().clock_synced;
     if (!synced) {
       had_clock_sync = false;
@@ -386,8 +415,15 @@ void LocalWssServer::run() {
     const bool ready = network_ready && certificate.start <= now_utc &&
                        now_utc < certificate.end;
     if (server_ && (!ready || ip != sta_ip_)) {
+      const auto net = network_->snapshot();
+      Serial.printf("Local WSS: gate ready=%u network=%u state=%u ap=%u clock=%u clock_integrity=%u wifi_status=%u ip_changed=%u cert_valid=%u\n",
+          ready, network_ready, static_cast<unsigned>(net.state), net.ap_active,
+          net.clock_synced, clock_integrity_.load(std::memory_order_relaxed),
+          static_cast<unsigned>(WiFi.status()), ip != sta_ip_,
+          certificate.start <= now_utc && now_utc < certificate.end);
       if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-        closeClient();
+        closeClient(!network_ready ? "network-gate" :
+                    ip != sta_ip_ ? "ip-change" : "clock-or-certificate");
         xSemaphoreGive(mutex_);
       }
       httpd_ssl_stop(server_);
@@ -436,20 +472,29 @@ void LocalWssServer::run() {
     }
     if (server_ && xSemaphoreTake(mutex_, pdMS_TO_TICKS(20)) == pdTRUE) {
       const uint32_t now = millis();
-      if (client_fd_ >= 0 && httpd_ws_get_fd_info(server_, client_fd_) != HTTPD_WS_CLIENT_WEBSOCKET)
+      if (client_fd_ >= 0 && httpd_ws_get_fd_info(server_, client_fd_) != HTTPD_WS_CLIENT_WEBSOCKET) {
+        Serial.printf("Local WSS: socket closed fd=%d phase=%u\n", client_fd_, static_cast<unsigned>(phase_));
         clearSession();
+      }
       if (phase_ == Phase::Challenge && now - phase_ms_ >= kAuthTimeoutMs) {
-        ++auth_failures_; closeClient();
+        ++auth_failures_; closeClient("auth-timeout");
       } else if (phase_ == Phase::Ready) {
-        if ((awaiting_pong_ && now - last_ping_ms_ >= kPongTimeoutMs) ||
-            now - last_frame_ms_ >= kIdleTimeoutMs) closeClient();
+        if (awaiting_pong_ && now - last_ping_ms_ >= kPongTimeoutMs)
+          closeClient("pong-timeout");
+        else if (now - last_frame_ms_ >= kIdleTimeoutMs)
+          closeClient("frame-idle-timeout");
         else if (!awaiting_pong_ && now - last_ping_ms_ >= kPingIntervalMs) {
           awaiting_pong_ = true; last_ping_ms_ = now;
-          httpd_queue_work(server_, pingWork, this);
+          const esp_err_t queued = httpd_queue_work(server_, pingWork, this);
+          if (queued != ESP_OK) {
+            awaiting_pong_ = false;
+            ++ping_send_errors_;
+            Serial.printf("Local WSS: ping queue error=%ld\n", static_cast<long>(queued));
+          }
         }
       }
       xSemaphoreGive(mutex_);
-    }
+    } else if (server_) ++mutex_misses_;
     if (millis() - last_diag >= 30000) { diagnostics(); last_diag = millis(); }
     vTaskDelay(pdMS_TO_TICKS(100));
   }
@@ -460,6 +505,9 @@ esp_err_t LocalWssServer::wsEntry(httpd_req_t* req) {
 void LocalWssServer::reject(httpd_req_t* req) {
   ++rejected_;
   const int fd = httpd_req_to_sockfd(req);
+  Serial.printf("Local WSS: reject phase=%u fd=%d auth_fail=%lu telemetry_reject=%lu\n",
+      static_cast<unsigned>(phase_), fd, static_cast<unsigned long>(auth_failures_),
+      static_cast<unsigned long>(rejected_telemetry_));
   if (server_) httpd_sess_trigger_close(server_, fd);
   if (client_fd_ == fd) clearSession();
 }
@@ -472,7 +520,10 @@ bool LocalWssServer::sendJson(httpd_req_t* req, const char* data) {
 }
 esp_err_t LocalWssServer::onFrame(httpd_req_t* req) {
   IPAddress ip;
-  if (!server_ || !allowed(&ip) || ip != sta_ip_) return ESP_FAIL;
+  if (!server_ || !allowed(&ip) || ip != sta_ip_) {
+    Serial.println("Local WSS: rejected frame at network gate");
+    return ESP_FAIL;
+  }
   struct sockaddr_storage local = {};
   socklen_t size = sizeof(local);
   const int fd = httpd_req_to_sockfd(req);
@@ -488,21 +539,33 @@ esp_err_t LocalWssServer::onFrame(httpd_req_t* req) {
   }
   const bool sta_socket = octets && octets[0] == ip[0] && octets[1] == ip[1] &&
       octets[2] == ip[2] && octets[3] == ip[3];
-  if (!sta_socket) return ESP_FAIL;
+  if (!sta_socket) {
+    Serial.println("Local WSS: rejected frame at STA socket gate");
+    return ESP_FAIL;
+  }
   if (req->method == HTTP_GET) return ESP_OK;
+  uint8_t payload[kMaxFrame + 1] = {};
   httpd_ws_frame_t frame = {};
-  if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK) return ESP_FAIL;
+  frame.payload = payload;
+  const esp_err_t receive_error = httpd_ws_recv_frame(req, &frame, kMaxFrame);
+  if (receive_error != ESP_OK) {
+    Serial.printf("Local WSS: rejected frame receive error=%ld\n", static_cast<long>(receive_error));
+    return ESP_FAIL;
+  }
   if (!frame.final || frame.len > kMaxFrame ||
       (frame.type != HTTPD_WS_TYPE_TEXT && frame.type != HTTPD_WS_TYPE_PING &&
-       frame.type != HTTPD_WS_TYPE_PONG)) return ESP_FAIL;
-  uint8_t payload[kMaxFrame + 1] = {};
-  frame.payload = payload;
-  if (httpd_ws_recv_frame(req, &frame, kMaxFrame) != ESP_OK) return ESP_FAIL;
+       frame.type != HTTPD_WS_TYPE_PONG)) {
+    Serial.printf("Local WSS: rejected frame shape type=%u final=%u len=%u\n",
+                  static_cast<unsigned>(frame.type), frame.final, static_cast<unsigned>(frame.len));
+    return ESP_FAIL;
+  }
   if (frame.type == HTTPD_WS_TYPE_PING) {
+    Serial.println("Local WSS: client ping received");
     frame.type = HTTPD_WS_TYPE_PONG;
     return httpd_ws_send_frame(req, &frame);
   }
   if (frame.type == HTTPD_WS_TYPE_PONG) {
+    Serial.println("Local WSS: client pong received");
     if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
       if (fd == client_fd_ && phase_ == Phase::Ready) {
         awaiting_pong_ = false; last_frame_ms_ = millis();
@@ -598,6 +661,14 @@ void LocalWssServer::onResponse(httpd_req_t* req, JsonObjectConst f) {
   phase_ = Phase::Ready; phase_ms_ = millis(); last_frame_ms_ = phase_ms_;
   last_ping_ms_ = phase_ms_; awaiting_pong_ = false;
   telemetry_.connected = true;
+  sockaddr_storage peer = {};
+  socklen_t peer_size = sizeof(peer);
+  if (getpeername(httpd_req_to_sockfd(req), reinterpret_cast<sockaddr*>(&peer), &peer_size) == 0 &&
+      peer.ss_family == AF_INET) {
+    const auto* address = reinterpret_cast<const sockaddr_in*>(&peer);
+    inet_ntop(AF_INET, &address->sin_addr, telemetry_.peer_ip, sizeof(telemetry_.peer_ip));
+  }
+  Serial.printf("Local WSS: authenticated peer=%s\n", telemetry_.peer_ip);
 }
 void LocalWssServer::onState(httpd_req_t* req, JsonObjectConst f) {
   JsonObjectConst s = f["state"].as<JsonObjectConst>();
@@ -644,6 +715,7 @@ void LocalWssServer::onState(httpd_req_t* req, JsonObjectConst f) {
   strlcpy(telemetry_.observed_at, s["observedAt"], sizeof(telemetry_.observed_at));
   telemetry_.sequence = f["sequence"].as<uint32_t>();
   telemetry_.received_ms = millis();
+  telemetry_.observed_epoch = static_cast<int64_t>(observed);
   last_frame_ms_ = millis();
   ++accepted_;
 }

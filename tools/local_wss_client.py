@@ -197,20 +197,24 @@ def hardware_suite(address, identity, ca):
             bad[field] = str(uuid.uuid4())
             write_frame(sock, json.dumps(bad))
             expect_closed(sock)
+        time.sleep(0.3)  # HTTPS worker closes rejected TLS sockets asynchronously.
     print("PASS: wrong device and installation rejected")
     with open_wss(address, identity, ca) as sock:
         early = state(hello(identity), 1)
         write_frame(sock, json.dumps(early))
         expect_closed(sock)
+    time.sleep(0.3)
     print("PASS: pre-auth telemetry rejected")
     with open_wss(address, identity, ca) as sock:
         authenticate(sock, identity, bad_mac=True)
+    time.sleep(0.3)
     print("PASS: invalid HMAC rejected")
     with open_wss(address, identity, ca) as sock:
         write_frame(sock, json.dumps(hello(identity)))
         read_json(sock)
         time.sleep(11)
         expect_closed(sock)
+    time.sleep(0.3)
     print("PASS: expired authentication challenge closed")
     for cycle in range(10):
         with open_wss(address, identity, ca) as sock:
@@ -223,6 +227,7 @@ def hardware_suite(address, identity, ca):
         _, response = authenticate(sock, identity, return_response=True)
         write_frame(sock, json.dumps(response))
         expect_closed(sock)
+    time.sleep(0.3)
     print("PASS: repeated authentication response rejected")
     with open_wss(address, identity, ca) as sock:
         first = hello(identity)
@@ -237,6 +242,7 @@ def hardware_suite(address, identity, ca):
     with open_wss(address, identity, ca) as sock:
         write_frame(sock, json.dumps(first))
         expect_closed(sock)
+    time.sleep(0.3)
     print("PASS: old session rejected after reconnect")
     cases = (
         ("duplicate telemetry", {"sequence": 2, "repeat": True}),
@@ -269,6 +275,7 @@ def hardware_suite(address, identity, ca):
         bad["state"]["valve"]["evidence"] = "sensed"
         write_frame(sock, json.dumps(bad))
         expect_closed(sock)
+    time.sleep(0.3)
     print("PASS: unsupported physical-position claim rejected")
     with open_wss(address, identity, ca) as first_sock:
         authenticate(first_sock, identity)
@@ -279,6 +286,7 @@ def hardware_suite(address, identity, ca):
         except (OSError, EOFError, ssl.SSLError):
             pass  # The socket cap may reject the second TLS handshake earlier.
     print("PASS: concurrent second client bounded")
+    time.sleep(0.3)
     with open_wss(address, identity, ca) as sock:
         ready = authenticate(sock, identity)
         sock.settimeout(26)

@@ -63,14 +63,11 @@ From the project directory:
 ~/.platformio/penv/bin/pio run -e esp32-s3-n16r8-tft
 ```
 
-Do not run an upload target until you explicitly decide to flash after the
-power and backlight requirements are confirmed. The enabled firmware sends
-ST7796 initialization commands, then shows red, green, blue, white, black,
-graphics, and a dashboard. Each test phase is logged over 115200-baud Serial.
-The [Nature Glass dashboard](nature-glass.md) updates changed value fields
-once per second and reports its update time in microseconds. Initial
-full-screen fills are intentional; the dashboard does not repeatedly clear
-the whole display.
+The early color and graphics test sequence described in older Phase 2 notes
+has been removed. The enabled firmware now initializes the ST7796S and shows
+the [permanent telemetry dashboard](TELEMETRY_DASHBOARD.md). Normal updates
+change only field and chart regions. Wi-Fi provisioning and OTA recovery can
+temporarily cover the temperature cards.
 
 ## Troubleshooting after safe wiring is established
 

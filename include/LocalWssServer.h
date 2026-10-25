@@ -16,6 +16,7 @@
 class LocalWssServer {
  public:
   struct Telemetry {
+    bool snapshot_ok = false;
     bool valid = false;
     bool connected = false;
     bool stale = true;
@@ -27,8 +28,10 @@ class LocalWssServer {
     char boot_id[129] = {};
     char device_session_id[37] = {};
     char observed_at[32] = {};
+    char peer_ip[16] = {};
     uint32_t sequence = 0;
     uint32_t received_ms = 0;
+    int64_t observed_epoch = 0;
   };
   void begin(NatureNetworkManager* network);
   Telemetry telemetry() const;
@@ -45,7 +48,7 @@ class LocalWssServer {
   void clearSession();
   bool allowed(IPAddress* ip = nullptr) const;
   bool configured() const;
-  void closeClient();
+  void closeClient(const char* reason);
   void reject(httpd_req_t* req);
   void onHello(httpd_req_t* req, JsonObjectConst frame);
   void onResponse(httpd_req_t* req, JsonObjectConst frame);
@@ -78,6 +81,10 @@ class LocalWssServer {
   uint32_t rejected_ = 0;
   uint32_t rejected_telemetry_ = 0;
   uint32_t http_stack_free_bytes_ = 0;
+  uint32_t mutex_misses_ = 0;
+  std::atomic<uint32_t> task_lag_max_ms_{0};
+  std::atomic<uint32_t> ping_send_errors_{0};
+  mutable std::atomic<uint32_t> snapshot_misses_{0};
   TaskHandle_t task_ = nullptr;
 };
 #endif

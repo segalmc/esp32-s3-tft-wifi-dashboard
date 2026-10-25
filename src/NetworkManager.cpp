@@ -39,6 +39,18 @@ void appendJsonString(String& output, const String& input) {
 }  // namespace
 
 void NatureNetworkManager::begin() {
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
+      Serial.printf("Wi-Fi event: disconnected reason=%u at_ms=%lu\n",
+                    static_cast<unsigned>(info.wifi_sta_disconnected.reason),
+                    static_cast<unsigned long>(millis()));
+    else if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED)
+      Serial.printf("Wi-Fi event: associated at_ms=%lu\n", static_cast<unsigned long>(millis()));
+    else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP)
+      Serial.printf("Wi-Fi event: got-ip at_ms=%lu\n", static_cast<unsigned long>(millis()));
+    else if (event == ARDUINO_EVENT_WIFI_STA_LOST_IP)
+      Serial.printf("Wi-Fi event: lost-ip at_ms=%lu\n", static_cast<unsigned long>(millis()));
+  });
   commands_ = xQueueCreate(2, sizeof(Command));
   if (!commands_ || xTaskCreate(taskEntry, "nature-wifi", 8192, this, 1, nullptr) != pdPASS) {
     Serial.println("Wi-Fi: task allocation failed");

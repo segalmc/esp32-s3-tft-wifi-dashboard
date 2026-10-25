@@ -6,6 +6,8 @@
 #if TFT_HARDWARE_ENABLED
 #include "NetworkManager.h"
 #include "TuyaControl.h"
+#include "LocalWssServer.h"
+#include "TemperatureHistory.h"
 #include <TFT_eSPI.h>
 #endif
 
@@ -20,42 +22,25 @@ class DisplayManager {
   void updateOta(NatureNetworkManager::OtaSnapshot ota, const char* password,
                  bool reveal, uint32_t now_ms);
   void updateBoiler(TuyaControl::Snapshot state);
+  void updateTelemetry(LocalWssServer::Telemetry state);
   uint32_t lastRefreshUs() const { return last_refresh_us_; }
 #endif
 
  private:
 #if TFT_HARDWARE_ENABLED
-  void showPhase();
-  void drawGraphics();
   void drawDashboardFrame();
-  void updateDashboard();
-  void drawValue(uint8_t row, const char* value);
-  void drawBoilerValue();
-  void restoreValueRegion(uint8_t row);
+  void drawTelemetryPage(bool chart);
   void streamAssetRegion(const uint16_t* pixels, int16_t x, int16_t y,
                          int16_t width, int16_t height);
-  void drawNetworkStatus();
   void drawSetupPanel(bool visible);
-  void drawClockPanel(const char* time_text, const char* weekday,
-                      const char* date_text);
   void restoreTopPanelRegion();
   void drawOtaPanel(NatureNetworkManager::OtaPhase phase, uint8_t percent,
                     uint8_t error, bool show_password);
-#if NATURE_GLASS_DIAGNOSTICS
-  void showDiagnosticStage(uint8_t stage);
-  uint8_t diagnostic_stage_ = 0;
-#endif
-
   TFT_eSPI tft_;
   bool background_ready_ = false;
-  bool first_dashboard_update_ = true;
   bool dashboard_ready_ = false;
   bool initial_password_shown_ = false;
   bool setup_panel_visible_ = false;
-  bool network_status_dirty_ = true;
-  bool clock_was_synced_ = false;
-  bool clock_visible_ = false;
-  bool clock_dirty_ = true;
   bool ota_panel_visible_ = false;
   bool ota_secret_visible_ = false;
   NatureNetworkManager::OtaPhase ota_drawn_phase_ = NatureNetworkManager::OtaPhase::Idle;
@@ -66,17 +51,20 @@ class DisplayManager {
   uint32_t ota_reveal_until_ms_ = 0;
   uint32_t ota_error_until_ms_ = 0;
   char network_status_[16] = "WIFI STARTING";
-  char cached_clock_time_[6] = {};
-  char cached_clock_date_[16] = {};
-  uint8_t cached_weekday_ = 255;
   char setup_password_[17] = {};
   uint32_t reveal_until_ms_ = 0;
-  uint32_t last_clock_sample_ms_ = 0;
   uint32_t last_refresh_us_ = 0;
-  uint8_t phase_ = 0;
-  uint32_t phase_started_ms_ = 0;
   uint32_t last_dashboard_ms_ = 0;
-  char cached_values_[8][32] = {};
   TuyaControl::Snapshot boiler_state_{};
+  LocalWssServer::Telemetry telemetry_state_{};
+  TemperatureHistory* history_ = nullptr;
+  bool first_chart_refresh_ = true;
+  char telemetry_lines_[12][64] = {};
+  bool chart_dirty_ = true;
+  int64_t chart_minute_ = -1;
+  uint32_t last_chart_draw_ms_ = 0;
+  int64_t last_history_expire_second_ = 0;
+  uint32_t last_telemetry_sequence_ = 0;
+  char last_telemetry_session_[37] = {};
 #endif
 };
