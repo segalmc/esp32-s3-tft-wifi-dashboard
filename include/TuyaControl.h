@@ -40,7 +40,7 @@ class TuyaControl {
     char last_failure[28];
   };
 
-  void begin(NetworkManager* network);
+  void begin(NatureNetworkManager* network);
   Snapshot snapshot() const;
   Accept request(Request request, uint32_t* command_id = nullptr);
   void enableReadsFromUsb();
@@ -66,7 +66,7 @@ class TuyaControl {
   void setProgress(Progress progress, const char* result);
   bool online() const;
 
-  NetworkManager* network_ = nullptr;
+  NatureNetworkManager* network_ = nullptr;
   mutable portMUX_TYPE lock_ = portMUX_INITIALIZER_UNLOCKED;
   Snapshot state_{};
   QueueHandle_t queue_ = nullptr;

@@ -13,7 +13,7 @@ IPAddress targetIp() {
 }
 }  // namespace
 
-void TuyaControl::begin(NetworkManager* network) {
+void TuyaControl::begin(NatureNetworkManager* network) {
   network_ = network;
   strncpy(state_.result, "idle", sizeof(state_.result));
   strncpy(state_.last_response_type, "none", sizeof(state_.last_response_type));
@@ -36,7 +36,7 @@ TuyaControl::Snapshot TuyaControl::snapshot() const {
 
 bool TuyaControl::online() const {
   const auto wifi = network_->snapshot();
-  return wifi.state == NetworkManager::State::Online && !wifi.ap_active &&
+  return wifi.state == NatureNetworkManager::State::Online && !wifi.ap_active &&
          WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
 }
 
@@ -56,7 +56,7 @@ TuyaControl::Accept TuyaControl::request(Request request, uint32_t* command_id) 
             ((request == Request::On || request == Request::Off) && !state_.control_enabled)))
     answer = Accept::Disabled;
   else if (request != Request::ArmMonitor && request != Request::DisarmMonitor &&
-           (wifi.state != NetworkManager::State::Online || wifi.ap_active ||
+           (wifi.state != NatureNetworkManager::State::Online || wifi.ap_active ||
             !wifi_connected))
     answer = Accept::Offline;
   else if (request == Request::On && !boiler_policy::mayTurnOn(wifi.clock_synced, now, storage_ready_))

@@ -38,7 +38,7 @@ void appendJsonString(String& output, const String& input) {
 }
 }  // namespace
 
-void NetworkManager::begin() {
+void NatureNetworkManager::begin() {
   commands_ = xQueueCreate(2, sizeof(Command));
   if (!commands_ || xTaskCreate(taskEntry, "nature-wifi", 8192, this, 1, nullptr) != pdPASS) {
     Serial.println("Wi-Fi: task allocation failed");
@@ -46,37 +46,37 @@ void NetworkManager::begin() {
   }
 }
 
-void NetworkManager::taskEntry(void* context) {
-  static_cast<NetworkManager*>(context)->run();
+void NatureNetworkManager::taskEntry(void* context) {
+  static_cast<NatureNetworkManager*>(context)->run();
 }
 
-void NetworkManager::setState(State state) {
+void NatureNetworkManager::setState(State state) {
   portENTER_CRITICAL(&snapshot_lock_);
   snapshot_.state = state;
   portEXIT_CRITICAL(&snapshot_lock_);
 }
 
-NetworkManager::Snapshot NetworkManager::snapshot() const {
+NatureNetworkManager::Snapshot NatureNetworkManager::snapshot() const {
   portENTER_CRITICAL(&snapshot_lock_);
   const Snapshot result = snapshot_;
   portEXIT_CRITICAL(&snapshot_lock_);
   return result;
 }
 
-NetworkManager::OtaSnapshot NetworkManager::otaSnapshot() const {
+NatureNetworkManager::OtaSnapshot NatureNetworkManager::otaSnapshot() const {
   portENTER_CRITICAL(&snapshot_lock_);
   const OtaSnapshot result = ota_snapshot_;
   portEXIT_CRITICAL(&snapshot_lock_);
   return result;
 }
 
-void NetworkManager::setOtaStatus(OtaPhase phase, uint8_t percent, uint8_t error) {
+void NatureNetworkManager::setOtaStatus(OtaPhase phase, uint8_t percent, uint8_t error) {
   portENTER_CRITICAL(&snapshot_lock_);
   ota_snapshot_ = {phase, percent, error, ota_snapshot_.event + 1};
   portEXIT_CRITICAL(&snapshot_lock_);
 }
 
-bool NetworkManager::copyOtaPassword(char* output, size_t size) const {
+bool NatureNetworkManager::copyOtaPassword(char* output, size_t size) const {
   if (!output || size < sizeof(ota_password_)) return false;
   portENTER_CRITICAL(&snapshot_lock_);
   const bool available = ota_password_ready_;
@@ -85,13 +85,13 @@ bool NetworkManager::copyOtaPassword(char* output, size_t size) const {
   return available;
 }
 
-bool NetworkManager::takeOtaRevealRequest() {
+bool NatureNetworkManager::takeOtaRevealRequest() {
   const bool result = ota_reveal_requested_;
   ota_reveal_requested_ = false;
   return result;
 }
 
-bool NetworkManager::copySetupPassword(char* output, size_t size) const {
+bool NatureNetworkManager::copySetupPassword(char* output, size_t size) const {
   if (!output || size < sizeof(ap_password_)) return false;
   portENTER_CRITICAL(&snapshot_lock_);
   const bool available = snapshot_.ap_active && ap_password_[0] != '\0';
@@ -100,13 +100,13 @@ bool NetworkManager::copySetupPassword(char* output, size_t size) const {
   return available;
 }
 
-bool NetworkManager::takeRevealRequest() {
+bool NatureNetworkManager::takeRevealRequest() {
   const bool result = reveal_requested_;
   reveal_requested_ = false;
   return result;
 }
 
-bool NetworkManager::loadStorage() {
+bool NatureNetworkManager::loadStorage() {
   if (!preferences_.begin("ngwifi", false)) return false;
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
@@ -163,7 +163,7 @@ bool NetworkManager::loadStorage() {
   return true;
 }
 
-void NetworkManager::run() {
+void NatureNetworkManager::run() {
   if (!loadStorage()) {
     Serial.println("Wi-Fi: NVS unavailable; protected setup disabled");
     setState(State::Error);
@@ -189,10 +189,10 @@ void NetworkManager::run() {
       if (elapsed_us > portal_max_us_) portal_max_us_ = elapsed_us;
       if (elapsed_us > 1000) ++portal_slow_calls_;
       if (due(now, portal_stats_started_ms_ + 30000U)) {
-        Serial.printf("Portal performance: handle_max=%lu us calls_over_1ms=%lu heap=%u B PSRAM=%u B\n",
+        Serial.printf("Portal performance: handle_max=%lu us calls_over_1ms=%lu heap=%lu B PSRAM=%lu B\n",
                       static_cast<unsigned long>(portal_max_us_),
                       static_cast<unsigned long>(portal_slow_calls_),
-                      ESP.getFreeHeap(), ESP.getFreePsram());
+                      static_cast<unsigned long>(ESP.getFreeHeap()), static_cast<unsigned long>(ESP.getFreePsram()));
         portal_stats_started_ms_ = now;
         portal_max_us_ = 0;
         portal_slow_calls_ = 0;
@@ -202,7 +202,7 @@ void NetworkManager::run() {
   }
 }
 
-void NetworkManager::startConnection(uint32_t now) {
+void NatureNetworkManager::startConnection(uint32_t now) {
   stopOta();
   WiFi.mode(snapshot().ap_active ? WIFI_AP_STA : WIFI_STA);
   WiFi.begin(saved_.ssid, saved_.password);
@@ -211,7 +211,7 @@ void NetworkManager::startConnection(uint32_t now) {
   Serial.println("Wi-Fi: connecting (SSID and password withheld)");
 }
 
-void NetworkManager::startPortal() {
+void NatureNetworkManager::startPortal() {
   if (snapshot().ap_active) return;
   stopOta();  // ArduinoOTA's UDP listener otherwise accepts AP clients too.
   WiFi.mode(WIFI_AP_STA);
@@ -236,12 +236,12 @@ void NetworkManager::startPortal() {
   Serial.println("Wi-Fi: protected setup AP active at 192.168.4.1");
 }
 
-void NetworkManager::stopPortal() {
+void NatureNetworkManager::stopPortal() {
   if (!snapshot().ap_active) return;
-  Serial.printf("Portal performance at close: handle_max=%lu us calls_over_1ms=%lu heap=%u B PSRAM=%u B\n",
+  Serial.printf("Portal performance at close: handle_max=%lu us calls_over_1ms=%lu heap=%lu B PSRAM=%lu B\n",
                 static_cast<unsigned long>(portal_max_us_),
                 static_cast<unsigned long>(portal_slow_calls_),
-                ESP.getFreeHeap(), ESP.getFreePsram());
+                static_cast<unsigned long>(ESP.getFreeHeap()), static_cast<unsigned long>(ESP.getFreePsram()));
   dns_.stop();
   server_.stop();
   WiFi.scanDelete();
@@ -252,7 +252,7 @@ void NetworkManager::stopPortal() {
   WiFi.mode(WIFI_STA);
 }
 
-void NetworkManager::scheduleRetry(uint32_t now) {
+void NatureNetworkManager::scheduleRetry(uint32_t now) {
   stopOta();
   WiFi.disconnect(false, false);
   portENTER_CRITICAL(&snapshot_lock_);
@@ -263,7 +263,7 @@ void NetworkManager::scheduleRetry(uint32_t now) {
   setState(State::RetryWait);
 }
 
-void NetworkManager::processCommands() {
+void NatureNetworkManager::processCommands() {
   Command command;
   while (commands_ && xQueueReceive(commands_, &command, 0) == pdTRUE) {
     if (command == Command::Setup) {
@@ -276,7 +276,7 @@ void NetworkManager::processCommands() {
   }
 }
 
-void NetworkManager::tick(uint32_t now) {
+void NatureNetworkManager::tick(uint32_t now) {
   if (has_pending_) {
     if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
       if (network_policy::commitAfterPersistence(saved_, pending_, [this](const Credentials& value) {
@@ -356,7 +356,7 @@ void NetworkManager::tick(uint32_t now) {
   }
 }
 
-void NetworkManager::processSerial() {
+void NatureNetworkManager::processSerial() {
   while (Serial.available()) {
     const char c = static_cast<char>(Serial.read());
     if (c == '\r') continue;
@@ -398,10 +398,10 @@ void NetworkManager::processSerial() {
           const int32_t rssi = WiFi.RSSI();
           if (rssi != 0) snprintf(rssi_text, sizeof(rssi_text), "%ld dBm", static_cast<long>(rssi));
         }
-        Serial.printf("Wi-Fi: state=%u AP=%s clock=%s IP=%s SSID=%s RSSI=%s heap=%u PSRAM=%u\n",
+        Serial.printf("Wi-Fi: state=%u AP=%s clock=%s IP=%s SSID=%s RSSI=%s heap=%lu PSRAM=%lu\n",
                       static_cast<unsigned>(current.state), current.ap_active ? "on" : "off",
                       current.clock_synced ? "synced" : "pending", ip, ssid, rssi_text,
-                      ESP.getFreeHeap(), ESP.getFreePsram());
+                      static_cast<unsigned long>(ESP.getFreeHeap()), static_cast<unsigned long>(ESP.getFreePsram()));
       } else if (tuya_ && strncmp(serial_line_, "tuya", 4) == 0) {
         if (strcmp(serial_line_, "tuya help") == 0) {
           Serial.println("Tuya USB: tuya status | on | off | reconnect | diagnostics | help");
@@ -469,9 +469,9 @@ void NetworkManager::processSerial() {
   }
 }
 
-void NetworkManager::update() { processSerial(); }
+void NatureNetworkManager::update() { processSerial(); }
 
-void NetworkManager::rotateOtaPassword() {
+void NatureNetworkManager::rotateOtaPassword() {
   char replacement[sizeof(ota_password_)] = {};
   for (uint8_t i = 0; i < sizeof(replacement) - 1; ++i) {
     replacement[i] = kAlphabet[esp_random() % (sizeof(kAlphabet) - 1)];
@@ -494,7 +494,7 @@ void NetworkManager::rotateOtaPassword() {
   ESP.restart();
 }
 
-void NetworkManager::stopOta() {
+void NatureNetworkManager::stopOta() {
   if (!ota_started_) return;
   ArduinoOTA.end();
   ota_started_ = false;
@@ -504,7 +504,7 @@ void NetworkManager::stopOta() {
   Serial.println("OTA: service stopped");
 }
 
-void NetworkManager::serviceOta() {
+void NatureNetworkManager::serviceOta() {
   const Snapshot current = snapshot();
   const bool linked = WiFi.status() == WL_CONNECTED &&
                       WiFi.localIP() != IPAddress(0, 0, 0, 0);
@@ -539,13 +539,13 @@ void NetworkManager::serviceOta() {
   ArduinoOTA.handle();
 }
 
-bool NetworkManager::apRequest() {
+bool NatureNetworkManager::apRequest() {
   if (snapshot().ap_active && server_.client().localIP() == WiFi.softAPIP()) return true;
   server_.send(403, "text/plain", "Setup is only available on NatureGlass-Setup.");
   return false;
 }
 
-void NetworkManager::configurePortal() {
+void NatureNetworkManager::configurePortal() {
   portal_configured_ = true;
   for (uint8_t i = 0; i < 16; ++i) {
     const uint8_t byte = static_cast<uint8_t>(esp_random());
@@ -566,7 +566,7 @@ void NetworkManager::configurePortal() {
   });
 }
 
-void NetworkManager::handleRoot() {
+void NatureNetworkManager::handleRoot() {
   if (!apRequest()) return;
   String page = FPSTR(kPortalHtml);
   page.replace("{{TOKEN}}", csrf_token_);
@@ -575,7 +575,7 @@ void NetworkManager::handleRoot() {
   server_.send(200, "text/html; charset=utf-8", page);
 }
 
-void NetworkManager::handleScan() {
+void NatureNetworkManager::handleScan() {
   if (!apRequest()) return;
   const uint32_t now = millis();
   if (!scan_running_ && (scan_started_ms_ == 0 || due(now, scan_started_ms_ + kScanCooldownMs))) {
@@ -610,13 +610,13 @@ void NetworkManager::handleScan() {
   server_.send(200, "application/json", scan_json_);
 }
 
-bool NetworkManager::validCredentials(const Credentials& value) const {
+bool NatureNetworkManager::validCredentials(const Credentials& value) const {
   if (value.magic != kCredentialMagic) return false;
   return network_policy::validHomeCredentials(value.ssid, sizeof(value.ssid),
                                               value.password, sizeof(value.password));
 }
 
-void NetworkManager::handleSave() {
+void NatureNetworkManager::handleSave() {
   if (!apRequest()) return;
   server_.sendHeader("Cache-Control", "no-store");
   const int length = server_.clientContentLength();
@@ -658,7 +658,7 @@ void NetworkManager::handleSave() {
   server_.send(202, "application/json", "{\"result\":\"connecting\"}");
 }
 
-void NetworkManager::handleStatus() {
+void NatureNetworkManager::handleStatus() {
   if (!apRequest()) return;
   server_.sendHeader("Cache-Control", "no-store");
   if (strcmp(portal_result_, "failed") == 0) {
@@ -673,12 +673,12 @@ void NetworkManager::handleStatus() {
   }
 }
 
-void NetworkManager::clearPending() {
+void NatureNetworkManager::clearPending() {
   memset(&pending_, 0, sizeof(pending_));
   has_pending_ = false;
 }
 
-void NetworkManager::startClock() {
+void NatureNetworkManager::startClock() {
   configTzTime("IST-2IDT,M3.4.4/26,M10.5.0", "pool.ntp.org", "time.nist.gov");
   clock_started_ms_ = millis();
   clock_warning_sent_ = false;
@@ -687,7 +687,7 @@ void NetworkManager::startClock() {
   portEXIT_CRITICAL(&snapshot_lock_);
 }
 
-void NetworkManager::checkClock(uint32_t now) {
+void NatureNetworkManager::checkClock(uint32_t now) {
   if (snapshot().clock_synced) return;
   if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED && time(nullptr) > 1700000000) {
     portENTER_CRITICAL(&snapshot_lock_);

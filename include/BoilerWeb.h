@@ -8,7 +8,7 @@
 
 class BoilerWeb {
  public:
-  void begin(NetworkManager* network, TuyaControl* control);
+  void begin(NatureNetworkManager* network, TuyaControl* control);
  private:
   static void taskEntry(void* context);
   void run();
@@ -25,7 +25,7 @@ class BoilerWeb {
   void status();
   void command();
   static void randomHex(char* output, size_t bytes);
-  NetworkManager* network_ = nullptr;
+  NatureNetworkManager* network_ = nullptr;
   TuyaControl* control_ = nullptr;
   std::unique_ptr<WebServer> server_;
   bool running_ = false;

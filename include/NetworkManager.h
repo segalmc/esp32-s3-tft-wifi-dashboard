@@ -11,7 +11,7 @@
 #include <WiFi.h>
 class TuyaControl;
 
-class NetworkManager {
+class NatureNetworkManager {
  public:
   enum class State : uint8_t { Setup, Connecting, Online, RetryWait, Error };
   struct Snapshot {
