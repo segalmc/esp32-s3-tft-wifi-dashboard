@@ -5,5 +5,7 @@
 .vscode/ipch/
 .env
 secrets.h
+LocalWssConfig.h
+.local-wss/
 .boiler-web-password
 __pycache__/
