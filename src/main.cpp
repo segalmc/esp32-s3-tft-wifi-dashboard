@@ -16,7 +16,7 @@
 SystemMonitor system_monitor;
 DisplayManager display_manager;
 #if TFT_HARDWARE_ENABLED
-NetworkManager network_manager;
+NatureNetworkManager network_manager;
 TuyaControl tuya_control;
 BoilerWeb boiler_web;
 uint32_t last_loop_ms = 0;
@@ -50,11 +50,11 @@ void loop() {
   const auto wifi = network_manager.snapshot();
   const char* wifi_label = "WIFI OFFLINE";
   switch (wifi.state) {
-    case NetworkManager::State::Setup: wifi_label = "WIFI SETUP"; break;
-    case NetworkManager::State::Connecting: wifi_label = "WIFI JOINING"; break;
-    case NetworkManager::State::Online: wifi_label = "WIFI ONLINE"; break;
-    case NetworkManager::State::RetryWait: wifi_label = "WIFI RETRY"; break;
-    case NetworkManager::State::Error: wifi_label = "WIFI ERROR"; break;
+    case NatureNetworkManager::State::Setup: wifi_label = "WIFI SETUP"; break;
+    case NatureNetworkManager::State::Connecting: wifi_label = "WIFI JOINING"; break;
+    case NatureNetworkManager::State::Online: wifi_label = "WIFI ONLINE"; break;
+    case NatureNetworkManager::State::RetryWait: wifi_label = "WIFI RETRY"; break;
+    case NatureNetworkManager::State::Error: wifi_label = "WIFI ERROR"; break;
   }
   char setup_password[17] = {};
   if (wifi.ap_active) network_manager.copySetupPassword(setup_password, sizeof(setup_password));
@@ -72,9 +72,9 @@ void loop() {
   last_loop_ms = now_ms;
   max_dashboard_us = max(max_dashboard_us, display_manager.lastRefreshUs());
   if (now_ms - stats_started_ms >= 30000U) {
-    Serial.printf("Performance: AP=%s loop_gap_max=%lu ms dashboard_max=%lu us heap=%u B PSRAM=%u B\n",
+    Serial.printf("Performance: AP=%s loop_gap_max=%lu ms dashboard_max=%lu us heap=%lu B PSRAM=%lu B\n",
                   wifi.ap_active ? "on" : "off", static_cast<unsigned long>(max_loop_gap_ms),
-                  static_cast<unsigned long>(max_dashboard_us), ESP.getFreeHeap(), ESP.getFreePsram());
+                  static_cast<unsigned long>(max_dashboard_us), static_cast<unsigned long>(ESP.getFreeHeap()), static_cast<unsigned long>(ESP.getFreePsram()));
     stats_started_ms = now_ms;
     max_loop_gap_ms = 0;
     max_dashboard_us = 0;

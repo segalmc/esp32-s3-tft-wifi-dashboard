@@ -8,12 +8,12 @@ void SystemMonitor::begin() {
   last_report_ms_ = started_ms_;
   Serial.println("ESP32-S3 Phase 1 hardware check");
   Serial.printf("Chip model: %s\n", ESP.getChipModel());
-  Serial.printf("Flash size: %u bytes\n", ESP.getFlashChipSize());
+  Serial.printf("Flash size: %lu bytes\n", static_cast<unsigned long>(ESP.getFlashChipSize()));
   const bool psram_available = psramFound();
   Serial.printf("PSRAM available: %s\n", psram_available ? "yes" : "no");
-  Serial.printf("PSRAM size: %u bytes\n", ESP.getPsramSize());
-  Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
-  Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+  Serial.printf("PSRAM size: %lu bytes\n", static_cast<unsigned long>(ESP.getPsramSize()));
+  Serial.printf("Free heap: %lu bytes\n", static_cast<unsigned long>(ESP.getFreeHeap()));
+  Serial.printf("Free PSRAM: %lu bytes\n", static_cast<unsigned long>(ESP.getFreePsram()));
 
 #if RGB_LED_GPIO >= 0
   Serial.printf("RGB LED test enabled on GPIO %d\n", RGB_LED_GPIO);
@@ -28,19 +28,19 @@ void SystemMonitor::update(uint32_t now_ms) {
   // delaying the rest of the firmware.
   if (!boot_replayed_ && static_cast<uint32_t>(now_ms - started_ms_) >= 2000U) {
     boot_replayed_ = true;
-    Serial.printf("Boot report: %s | Flash: %u bytes | PSRAM: %u bytes | Free heap: %u bytes\n",
-                  ESP.getChipModel(), ESP.getFlashChipSize(), ESP.getPsramSize(),
-                  ESP.getFreeHeap());
+    Serial.printf("Boot report: %s | Flash: %lu bytes | PSRAM: %lu bytes | Free heap: %lu bytes\n",
+                  ESP.getChipModel(), static_cast<unsigned long>(ESP.getFlashChipSize()), static_cast<unsigned long>(ESP.getPsramSize()),
+                  static_cast<unsigned long>(ESP.getFreeHeap()));
   }
   if (static_cast<uint32_t>(now_ms - last_report_ms_) < 1000U) return;
   last_report_ms_ += 1000U;
   ++seconds_;
-  Serial.printf("Uptime: %lu s | Flash: %u MB | PSRAM: %u MB | PSRAM OK: %s | Free heap: %u B | Free PSRAM: %u B\n",
+  Serial.printf("Uptime: %lu s | Flash: %lu MB | PSRAM: %lu MB | PSRAM OK: %s | Free heap: %lu B | Free PSRAM: %lu B\n",
                 static_cast<unsigned long>(seconds_),
-                ESP.getFlashChipSize() / 1024U / 1024U,
-                ESP.getPsramSize() / 1024U / 1024U,
-                psramFound() ? "YES" : "NO", ESP.getFreeHeap(),
-                ESP.getFreePsram());
+                static_cast<unsigned long>(ESP.getFlashChipSize()) / 1024U / 1024U,
+                static_cast<unsigned long>(ESP.getPsramSize()) / 1024U / 1024U,
+                psramFound() ? "YES" : "NO", static_cast<unsigned long>(ESP.getFreeHeap()),
+                static_cast<unsigned long>(ESP.getFreePsram()));
 
 #if RGB_LED_GPIO >= 0
   // Red, green, blue, off; advance once per second without blocking.

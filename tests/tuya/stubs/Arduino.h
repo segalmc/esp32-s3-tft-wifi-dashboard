@@ -19,13 +19,25 @@ inline void memcpy_P(void* dst, const void* src, size_t n) {
   memcpy(dst, src, n);
 }
 
+inline bool& useFakeMillis() { static bool enabled = false; return enabled; }
+inline uint32_t& fakeMillis() { static uint32_t value = 0; return value; }
+
 inline unsigned long millis() {
+  if (useFakeMillis()) return fakeMillis();
   using namespace std::chrono;
   static const steady_clock::time_point start = steady_clock::now();
   return (unsigned long)duration_cast<milliseconds>(steady_clock::now() - start).count();
 }
 
+inline unsigned long micros() {
+  if (useFakeMillis()) return fakeMillis() * 1000UL;
+  using namespace std::chrono;
+  static const steady_clock::time_point start = steady_clock::now();
+  return (unsigned long)duration_cast<microseconds>(steady_clock::now() - start).count();
+}
+
 inline void delay(unsigned long ms) {
+  if (useFakeMillis()) { fakeMillis() += static_cast<uint32_t>(ms); return; }
   std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
@@ -85,6 +97,10 @@ class IPAddress {
 public:
   IPAddress() : octets{0, 0, 0, 0} {}
   IPAddress(uint8_t a, uint8_t b, uint8_t c, uint8_t d) : octets{a, b, c, d} {}
+  bool operator==(const IPAddress& other) const {
+    return memcmp(octets, other.octets, sizeof(octets)) == 0;
+  }
+  uint8_t operator[](size_t index) const { return octets[index]; }
   uint8_t octets[4];
 };
 

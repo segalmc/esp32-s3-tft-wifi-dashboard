@@ -240,9 +240,9 @@ void DisplayManager::drawDashboardFrame() {
     tft_.drawString(kLabels[row], cardX(row) + 13, cardY(row) + 18);
     cached_values_[row][0] = '\0';
   }
-  Serial.printf("TFT: frame=%lu us, heap=%u B, PSRAM=%u/%u B, photo=%s\n",
-                static_cast<unsigned long>(micros() - started_us), ESP.getFreeHeap(),
-                ESP.getFreePsram(), ESP.getPsramSize(),
+  Serial.printf("TFT: frame=%lu us, heap=%lu B, PSRAM=%lu/%lu B, photo=%s\n",
+                static_cast<unsigned long>(micros() - started_us), static_cast<unsigned long>(ESP.getFreeHeap()),
+                static_cast<unsigned long>(ESP.getFreePsram()), static_cast<unsigned long>(ESP.getPsramSize()),
                 background_ready_ ? "yes" : "fallback");
   dashboard_ready_ = true;
 }
@@ -328,8 +328,7 @@ void DisplayManager::updateClock(bool ntp_synced, uint32_t now_ms) {
   char time_text[6];
   char date_text[16];
   snprintf(time_text, sizeof(time_text), "%02d:%02d", local.tm_hour, local.tm_min);
-  snprintf(date_text, sizeof(date_text), "%02d/%02d/%04d", local.tm_mday,
-           local.tm_mon + 1, local.tm_year + 1900);
+  if (strftime(date_text, sizeof(date_text), "%d/%m/%Y", &local) == 0) return;
   if (clock_dirty_ || strcmp(cached_clock_time_, time_text) != 0 ||
       strcmp(cached_clock_date_, date_text) != 0 || cached_weekday_ != local.tm_wday) {
     drawClockPanel(time_text, kWeekdays[local.tm_wday], date_text);
@@ -379,7 +378,7 @@ void DisplayManager::updateNetwork(const char* status, bool ap_active,
   }
 }
 
-void DisplayManager::drawOtaPanel(NetworkManager::OtaPhase phase, uint8_t percent,
+void DisplayManager::drawOtaPanel(NatureNetworkManager::OtaPhase phase, uint8_t percent,
                                   uint8_t error, bool show_password) {
   restoreTopPanelRegion();
   tft_.fillRoundRect(22, 91, 276, 58, 10, kNavy);
@@ -396,14 +395,14 @@ void DisplayManager::drawOtaPanel(NetworkManager::OtaPhase phase, uint8_t percen
     tft_.setTextFont(1);
     tft_.setTextColor(kOrange);
     tft_.drawString("HIDES IN 60 SECONDS", 31, 138);
-  } else if (phase == NetworkManager::OtaPhase::Error) {
+  } else if (phase == NatureNetworkManager::OtaPhase::Error) {
     constexpr const char* errors[] = {"AUTH FAILED", "START FAILED", "CONNECT FAILED",
                                       "RECEIVE FAILED", "IMAGE FAILED"};
     tft_.drawString("OTA UPDATE ERROR", 31, 99);
     tft_.setTextFont(2);
     tft_.setTextColor(kOrange);
     tft_.drawString(error < 5 ? errors[error] : "UNKNOWN ERROR", 31, 117);
-  } else if (phase == NetworkManager::OtaPhase::Success) {
+  } else if (phase == NatureNetworkManager::OtaPhase::Success) {
     tft_.drawString("OTA UPDATE", 31, 99);
     tft_.setTextFont(2);
     tft_.setTextColor(TFT_WHITE);
@@ -419,23 +418,23 @@ void DisplayManager::drawOtaPanel(NetworkManager::OtaPhase phase, uint8_t percen
   clock_dirty_ = true;
 }
 
-void DisplayManager::updateOta(NetworkManager::OtaSnapshot ota, const char* password,
+void DisplayManager::updateOta(NatureNetworkManager::OtaSnapshot ota, const char* password,
                                bool reveal, uint32_t now_ms) {
   if (reveal && password && password[0]) {
     memcpy(ota_password_, password, sizeof(ota_password_));
     ota_reveal_until_ms_ = now_ms + 60000U;
   }
-  if (ota.phase == NetworkManager::OtaPhase::Error &&
+  if (ota.phase == NatureNetworkManager::OtaPhase::Error &&
       ota.event != ota_last_error_event_) {
     ota_error_until_ms_ = now_ms + 10000U;
     ota_last_error_event_ = ota.event;
   }
   if (!dashboard_ready_) return;
 
-  const bool show_error = ota.phase == NetworkManager::OtaPhase::Error &&
+  const bool show_error = ota.phase == NatureNetworkManager::OtaPhase::Error &&
                           static_cast<int32_t>(now_ms - ota_error_until_ms_) < 0;
-  const bool show_progress = ota.phase == NetworkManager::OtaPhase::Uploading ||
-                             ota.phase == NetworkManager::OtaPhase::Success;
+  const bool show_progress = ota.phase == NatureNetworkManager::OtaPhase::Uploading ||
+                             ota.phase == NatureNetworkManager::OtaPhase::Success;
   const bool show_password = !show_error && !show_progress &&
                              ota_reveal_until_ms_ &&
                              static_cast<int32_t>(now_ms - ota_reveal_until_ms_) < 0;
@@ -571,13 +570,13 @@ void DisplayManager::updateDashboard() {
            static_cast<unsigned long>((elapsed_s / 60U) % 60U),
            static_cast<unsigned long>(elapsed_s % 60U));
   drawValue(1, value);
-  snprintf(value, sizeof(value), "%u KiB", ESP.getFreeHeap() / 1024U);
+  snprintf(value, sizeof(value), "%lu KiB", static_cast<unsigned long>(ESP.getFreeHeap()) / 1024U);
   drawValue(2, value);
-  snprintf(value, sizeof(value), "%u MiB", ESP.getPsramSize() / 1048576U);
+  snprintf(value, sizeof(value), "%lu MiB", static_cast<unsigned long>(ESP.getPsramSize()) / 1048576U);
   drawValue(3, value);
-  snprintf(value, sizeof(value), "%u KiB", ESP.getFreePsram() / 1024U);
+  snprintf(value, sizeof(value), "%lu KiB", static_cast<unsigned long>(ESP.getFreePsram()) / 1024U);
   drawValue(4, value);
-  snprintf(value, sizeof(value), "%u MiB", ESP.getFlashChipSize() / 1048576U);
+  snprintf(value, sizeof(value), "%lu MiB", static_cast<unsigned long>(ESP.getFlashChipSize()) / 1048576U);
   drawValue(5, value);
   snprintf(value, sizeof(value), "%dx%d", tft_.width(), tft_.height());
   drawValue(6, value);
@@ -585,8 +584,8 @@ void DisplayManager::updateDashboard() {
   last_refresh_us_ = refresh_us;
   snprintf(value, sizeof(value), "%lu us", static_cast<unsigned long>(refresh_us));
   drawValue(7, value);
-  Serial.printf("TFT dashboard: heap=%u B, PSRAM=%u/%u B, refresh=%lu us\n",
-                ESP.getFreeHeap(), ESP.getFreePsram(), ESP.getPsramSize(),
+  Serial.printf("TFT dashboard: heap=%lu B, PSRAM=%lu/%lu B, refresh=%lu us\n",
+                static_cast<unsigned long>(ESP.getFreeHeap()), static_cast<unsigned long>(ESP.getFreePsram()), static_cast<unsigned long>(ESP.getPsramSize()),
                 static_cast<unsigned long>(refresh_us));
   first_dashboard_update_ = false;
 }

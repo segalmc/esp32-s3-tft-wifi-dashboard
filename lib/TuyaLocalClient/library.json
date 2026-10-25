@@ -1,0 +1,12 @@
+{
+  "name": "TuyaLocalClient",
+  "version": "0.1.0",
+  "description": "Authenticated Tuya 3.4 local client lifecycle and DPS communication for ESP32 Arduino",
+  "frameworks": ["arduino"],
+  "platforms": ["espressif32"],
+  "headers": ["TuyaLocalClient.h"],
+  "dependencies": [
+    {"name": "LynkTuyaLocal"},
+    {"name": "ArduinoJson", "version": "6.21.5"}
+  ]
+}

@@ -13,18 +13,18 @@
 
 namespace {
 const char kLoginHtml[] PROGMEM = R"HTML(<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Boiler sign in</title><style>:root{color-scheme:dark}body{font:16px system-ui;background:#102538;color:#eef8f8;min-height:100vh;display:grid;place-items:center;margin:0;padding:16px}main{width:min(100%,420px);background:#1c394b;border:1px solid #5b8e96;border-radius:16px;padding:24px}input,button{width:100%;box-sizing:border-box;padding:13px;border-radius:8px;font:inherit;margin-top:12px}input{background:#112a3a;color:white;border:1px solid #7a9}button{background:#64d4bc;border:0;font-weight:bold}</style><main><h1>Boiler</h1><form method="post" action="/login"><label for="password">Local dashboard password</label><input id="password" name="password" type="password" autocomplete="current-password" required><input type="hidden" name="csrf" value="{{CSRF}}"><button>Sign in</button></form></main></html>)HTML";
-const char* otaPhaseName(NetworkManager::OtaPhase phase) {
+const char* otaPhaseName(NatureNetworkManager::OtaPhase phase) {
   switch (phase) {
-    case NetworkManager::OtaPhase::Idle: return "idle";
-    case NetworkManager::OtaPhase::Uploading: return "uploading";
-    case NetworkManager::OtaPhase::Success: return "success";
-    case NetworkManager::OtaPhase::Error: return "error";
+    case NatureNetworkManager::OtaPhase::Idle: return "idle";
+    case NatureNetworkManager::OtaPhase::Uploading: return "uploading";
+    case NatureNetworkManager::OtaPhase::Success: return "success";
+    case NatureNetworkManager::OtaPhase::Error: return "error";
   }
   return "unavailable";
 }
 }  // namespace
 
-void BoilerWeb::begin(NetworkManager* network, TuyaControl* control) {
+void BoilerWeb::begin(NatureNetworkManager* network, TuyaControl* control) {
   network_ = network;
   control_ = control;
   randomHex(login_csrf_, 16);
@@ -43,7 +43,7 @@ void BoilerWeb::randomHex(char* output, size_t bytes) {
 }
 bool BoilerWeb::available() const {
   const auto wifi = network_->snapshot();
-  return wifi.state == NetworkManager::State::Online && !wifi.ap_active &&
+  return wifi.state == NatureNetworkManager::State::Online && !wifi.ap_active &&
          WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
 }
 void BoilerWeb::run() {
@@ -148,7 +148,7 @@ void BoilerWeb::login() {
     uint8_t input[16 + 128];
     memcpy(input, WEB_PASSWORD_SALT, 16);
     memcpy(input + 16, password.c_str(), password.length());
-    if (mbedtls_sha256_ret(input, 16 + password.length(), hash, 0) == 0)
+    if (mbedtls_sha256(input, 16 + password.length(), hash, 0) == 0)
       accepted = boiler_web_policy::constantEqual(hash, WEB_PASSWORD_HASH, sizeof(hash));
     memset(input, 0, sizeof(input));
   }
@@ -220,7 +220,7 @@ void BoilerWeb::status() {
   data.lastFrameLength = state.last_frame_length;
   data.lastResponseType = state.last_response_type;
   data.lastFailure = state.last_failure;
-  data.reconcileIntervalMs = boiler_policy::kReconcileMs;
+  data.reconcileIntervalMs = state.reconcile_interval_ms;
   data.ssid = ssid.c_str();
   data.ip = ip.c_str();
   data.rssiDbm = WiFi.RSSI();

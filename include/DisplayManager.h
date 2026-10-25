@@ -17,7 +17,7 @@ class DisplayManager {
   void updateNetwork(const char* status, bool ap_active, bool initial_setup,
                      const char* ap_password, bool reveal, uint32_t now_ms);
   void updateClock(bool ntp_synced, uint32_t now_ms);
-  void updateOta(NetworkManager::OtaSnapshot ota, const char* password,
+  void updateOta(NatureNetworkManager::OtaSnapshot ota, const char* password,
                  bool reveal, uint32_t now_ms);
   void updateBoiler(TuyaControl::Snapshot state);
   uint32_t lastRefreshUs() const { return last_refresh_us_; }
@@ -39,7 +39,7 @@ class DisplayManager {
   void drawClockPanel(const char* time_text, const char* weekday,
                       const char* date_text);
   void restoreTopPanelRegion();
-  void drawOtaPanel(NetworkManager::OtaPhase phase, uint8_t percent,
+  void drawOtaPanel(NatureNetworkManager::OtaPhase phase, uint8_t percent,
                     uint8_t error, bool show_password);
 #if NATURE_GLASS_DIAGNOSTICS
   void showDiagnosticStage(uint8_t stage);
@@ -58,7 +58,7 @@ class DisplayManager {
   bool clock_dirty_ = true;
   bool ota_panel_visible_ = false;
   bool ota_secret_visible_ = false;
-  NetworkManager::OtaPhase ota_drawn_phase_ = NetworkManager::OtaPhase::Idle;
+  NatureNetworkManager::OtaPhase ota_drawn_phase_ = NatureNetworkManager::OtaPhase::Idle;
   uint8_t ota_drawn_percent_ = 0;
   uint8_t ota_drawn_error_ = 0;
   uint32_t ota_last_error_event_ = 0;
