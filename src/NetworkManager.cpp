@@ -354,6 +354,11 @@ void NatureNetworkManager::tick(uint32_t now) {
       startClock();
       if (snapshot().ap_active && !portal_manual_ && !portal_closing_) stopPortal();
     }
+    if (clock_resync_requested_.exchange(false, std::memory_order_acq_rel)) {
+      Serial.println("Wi-Fi: WSS requested fresh clock synchronization");
+      startClock();
+      return;  // Leave the clock gate closed until a later SNTP completion.
+    }
     checkClock(now);
     return;
   }
@@ -704,11 +709,16 @@ void NatureNetworkManager::startClock() {
   portEXIT_CRITICAL(&snapshot_lock_);
 }
 
+void NatureNetworkManager::requestClockResync() {
+  clock_resync_requested_.store(true, std::memory_order_release);
+}
+
 void NatureNetworkManager::checkClock(uint32_t now) {
   if (snapshot().clock_synced) return;
   if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED && time(nullptr) > 1700000000) {
     portENTER_CRITICAL(&snapshot_lock_);
     snapshot_.clock_synced = true;
+    ++snapshot_.clock_sync_generation;
     portEXIT_CRITICAL(&snapshot_lock_);
     Serial.println("Wi-Fi: clock synchronized; Israel timezone active");
   } else if (!clock_warning_sent_ && due(now, clock_started_ms_ + 30000U)) {
