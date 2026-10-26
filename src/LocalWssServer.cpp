@@ -595,6 +595,7 @@ LocalWssServer::Telemetry LocalWssServer::telemetry() const
     return copy;
   }
   copy = telemetry_;
+  copy.wss_resets = connection_resets_;
   copy.snapshot_ok = true;
   copy.connected = phase_ == Phase::Ready;
   copy.stale = local_wss_policy::stale(copy.connected, copy.valid,
@@ -616,8 +617,7 @@ void LocalWssServer::diagnostics() const
   size_t httpd_sessions = 2;
   int httpd_fds[2] = {-1, -1};
   const httpd_handle_t server = server_.load(std::memory_order_acquire);
-  const esp_err_t session_list_result = server ?
-      httpd_get_client_list(server, &httpd_sessions, httpd_fds) : ESP_ERR_INVALID_STATE;
+  const esp_err_t session_list_result = server ? httpd_get_client_list(server, &httpd_sessions, httpd_fds) : ESP_ERR_INVALID_STATE;
   Serial.printf("Local WSS: clients=%u httpd_sessions=%u httpd_list_err=%ld tls_created=%lu tls_closed=%lu auth_fail=%lu tls_error=%lu resets=%lu telemetry_accepted=%lu telemetry_rejected=%lu app_rejected=%lu age_ms=%lu heap=%lu min_heap=%lu largest_internal=%lu psram=%lu manager_stack_free_B=%lu http_stack_free_B=%lu mutex_miss=%lu snapshot_miss=%lu task_lag_max_ms=%lu ping_send_error=%lu\n",
                 clients,
                 session_list_result == ESP_OK ? static_cast<unsigned>(httpd_sessions) : 0U,
@@ -808,7 +808,8 @@ void LocalWssServer::run()
       }
       httpd_ssl_stop(server_);
       server_ = nullptr;
-      for (auto &watch : unclaimed_sessions_) watch = {};
+      for (auto &watch : unclaimed_sessions_)
+        watch = {};
       if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(1000)) == pdTRUE)
       {
         clearSession();
@@ -930,7 +931,8 @@ void LocalWssServer::run()
                           static_cast<long>(close_result));
             if (close_result != ESP_OK)
               for (auto &watch : unclaimed_sessions_)
-                if (watch.fd == expired) watch.close_requested = false;
+                if (watch.fd == expired)
+                  watch.close_requested = false;
           }
         }
       }
