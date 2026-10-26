@@ -1,6 +1,8 @@
 #pragma once
 
 #include "TftConfig.h"
+#include "LocalWssReceivePolicy.h"
+#include "LocalWssSessionPolicy.h"
 #if TFT_HARDWARE_ENABLED
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -43,6 +45,8 @@ class LocalWssServer {
   static esp_err_t wsEntry(httpd_req_t* req);
   static void pingWork(void* context);
   static void tlsError(void* context, esp_event_base_t, int32_t, void*);
+  static void tlsSession(esp_https_server_user_cb_arg_t* event);
+  static int tlsReceive(httpd_handle_t handle, int fd, char* buffer, size_t length, int flags);
   void run();
   esp_err_t onFrame(httpd_req_t* req);
   void clearSession();
@@ -54,10 +58,20 @@ class LocalWssServer {
   void onResponse(httpd_req_t* req, JsonObjectConst frame);
   void onState(httpd_req_t* req, JsonObjectConst frame);
   bool sendJson(httpd_req_t* req, const char* data);
+  void rememberTlsSession(esp_https_server_user_cb_arg_t* event);
+  esp_tls_t* tlsForFd(int fd) const;
+
 
   NatureNetworkManager* network_ = nullptr;
   std::atomic<bool> clock_integrity_{true};
   std::atomic<httpd_handle_t> server_{nullptr};
+  local_wss_receive_policy::SessionRef tls_sessions_[2]{{-1, nullptr}, {-1, nullptr}};
+  local_wss_session_policy::UnclaimedWatch unclaimed_sessions_[2]{};
+  int receive_diag_fd_ = -1;
+  int receive_diag_code_ = 0;
+  int receive_diag_errno_ = 0;
+  bool receive_diag_eof_ = false;
+  local_wss_receive_policy::FrameReceiveStats frame_receive_stats_{};
   IPAddress sta_ip_;
   mutable SemaphoreHandle_t mutex_ = nullptr;
   Telemetry telemetry_{};
@@ -76,6 +90,9 @@ class LocalWssServer {
   char expires_at_[32] = {};
   uint32_t auth_failures_ = 0;
   std::atomic<uint32_t> tls_failures_{0};
+  std::atomic<uint32_t> tls_sessions_created_{0};
+  std::atomic<uint32_t> tls_sessions_closed_{0};
+  std::atomic<uint32_t> tls_read_waits_{0};
   uint32_t connection_resets_ = 0;
   uint32_t accepted_ = 0;
   uint32_t rejected_ = 0;

@@ -217,6 +217,10 @@ void NatureNetworkManager::run() {
 void NatureNetworkManager::startConnection(uint32_t now) {
   stopOta();
   WiFi.mode(snapshot().ap_active ? WIFI_AP_STA : WIFI_STA);
+  // The USB-powered WSS listener must be able to receive client frames and
+  // reconnect handshakes without STA modem-sleep delivery latency.
+  const bool sleep_disabled = WiFi.setSleep(false);
+  Serial.printf("Wi-Fi: STA modem sleep disabled=%u\n", sleep_disabled && WiFi.getSleep() == WIFI_PS_NONE);
   WiFi.begin(saved_.ssid, saved_.password);
   attempt_started_ms_ = now;
   setState(State::Connecting);

@@ -1,10 +1,16 @@
 #include "LocalWssServer.h"
 #include "LocalWssPolicy.h"
 #include "LocalWssClockPolicy.h"
+#include "LocalWssReceivePolicy.h"
+#include "LocalWssSessionPolicy.h"
+#include "LocalWssTlsFailurePolicy.h"
 #if TFT_HARDWARE_ENABLED
 #include <esp_system.h>
 #include <esp_event.h>
+#include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include <lwip/sockets.h>
+#include <cerrno>
 #include <mbedtls/md.h>
 #include <mbedtls/x509_crt.h>
 #include <time.h>
@@ -34,7 +40,9 @@
 
 namespace
 {
+  LocalWssServer *active_local_wss = nullptr;
   constexpr uint32_t kAuthTimeoutMs = 10000;
+  constexpr uint32_t kTlsReadWaitMs = local_wss_receive_policy::kReadBudgetMs;
   constexpr uint32_t kPingIntervalMs = 20000;
   constexpr uint32_t kPongTimeoutMs = 10000;
   constexpr uint32_t kIdleTimeoutMs = 60000;
@@ -382,17 +390,170 @@ namespace
 void LocalWssServer::begin(NatureNetworkManager *network)
 {
   network_ = network;
+  active_local_wss = this;
   mutex_ = xSemaphoreCreateMutex();
   if (!mutex_ || xTaskCreate(taskEntry, "local-wss", 6144, this, 1, &task_) != pdPASS)
     Serial.println("Local WSS: task unavailable");
 }
-void LocalWssServer::tlsError(void *context, esp_event_base_t, int32_t event_id, void *)
+void LocalWssServer::tlsError(void *context, esp_event_base_t, int32_t event_id, void *event_data)
 {
   auto *self = static_cast<LocalWssServer *>(context);
+  const auto *error = static_cast<const esp_https_server_last_error_t *>(event_data);
+  const int tls_code = error ? error->esp_tls_error_code : 0;
+  if (local_wss_receive_policy::retryable_tls_io(
+          tls_code, ESP_TLS_ERR_SSL_WANT_READ, ESP_TLS_ERR_SSL_WANT_WRITE))
+  {
+    const uint32_t count = self->tls_read_waits_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (count <= 3 || count % 100 == 0)
+      Serial.printf("Local WSS: TLS read would-block event=%ld code=%d count=%lu\n",
+                    static_cast<long>(event_id), tls_code, static_cast<unsigned long>(count));
+    return;
+  }
   const uint32_t count = self->tls_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
-  Serial.printf("Local WSS: TLS error event=%ld count=%lu at_ms=%lu\n",
-                static_cast<long>(event_id), static_cast<unsigned long>(count),
-                static_cast<unsigned long>(millis()));
+  char detail[96] = "unavailable";
+  if (tls_code)
+    mbedtls_strerror(tls_code < 0 ? tls_code : -tls_code, detail, sizeof(detail));
+  if (count <= 8 || count % 20 == 0)
+    Serial.printf("Local WSS: TLS transport error event=%ld class=%s esp=%ld tls_code=%d flags=0x%08lx detail=%s count=%lu tls_created=%lu tls_closed=%lu heap=%lu largest_internal=%lu\n",
+                  static_cast<long>(event_id),
+                  local_wss_tls_failure_policy::name(local_wss_tls_failure_policy::classify(
+                      error ? error->last_error : 0, tls_code,
+                      error ? error->esp_tls_flags : 0)),
+                  error ? static_cast<long>(error->last_error) : 0L, tls_code,
+                  error ? static_cast<unsigned long>(error->esp_tls_flags) : 0UL, detail,
+                  static_cast<unsigned long>(count),
+                  static_cast<unsigned long>(self->tls_sessions_created_.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long>(self->tls_sessions_closed_.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long>(ESP.getFreeHeap()),
+                  static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+}
+void LocalWssServer::tlsSession(esp_https_server_user_cb_arg_t *event)
+{
+  if (active_local_wss && event)
+    active_local_wss->rememberTlsSession(event);
+}
+void LocalWssServer::rememberTlsSession(esp_https_server_user_cb_arg_t *event)
+{
+  int fd = -1;
+  if (event->tls)
+    esp_tls_get_conn_sockfd(event->tls, &fd);
+  if (event->user_cb_state == HTTPD_SSL_USER_CB_SESS_CLOSE)
+  {
+    const bool removed = local_wss_receive_policy::remove_session(
+        tls_sessions_, 2, event->tls);
+    const uint32_t count = tls_sessions_closed_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (count <= 8 || count % 20 == 0 || !removed)
+      Serial.printf("Local WSS: TLS session close fd=%d mapped=%u closed=%lu heap=%lu\n",
+                    fd, removed, static_cast<unsigned long>(count),
+                    static_cast<unsigned long>(ESP.getFreeHeap()));
+    return;
+  }
+  if (!event->tls || fd < 0)
+    return;
+  const bool mapped = local_wss_receive_policy::remember_session(
+      tls_sessions_, 2, fd, event->tls);
+  const uint32_t count = tls_sessions_created_.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (count <= 8 || count % 20 == 0 || !mapped)
+    Serial.printf("Local WSS: TLS session create fd=%d mapped=%u created=%lu heap=%lu\n",
+                  fd, mapped, static_cast<unsigned long>(count),
+                  static_cast<unsigned long>(ESP.getFreeHeap()));
+  if (!mapped)
+    Serial.printf("Local WSS: TLS session map full fd=%d\n", fd);
+}
+esp_tls_t *LocalWssServer::tlsForFd(int fd) const
+{
+  return static_cast<esp_tls_t *>(
+      local_wss_receive_policy::session_for_fd(tls_sessions_, 2, fd));
+}
+int LocalWssServer::tlsReceive(httpd_handle_t handle, int fd, char *buffer,
+                               size_t length, int flags)
+{
+  (void)flags;
+  auto *self = static_cast<LocalWssServer *>(httpd_get_global_user_ctx(handle));
+  esp_tls_t *tls = self ? self->tlsForFd(fd) : nullptr;
+  if (!tls || !buffer)
+    return HTTPD_SOCK_ERR_INVALID;
+
+  const uint32_t started = millis();
+  for (;;)
+  {
+    const int64_t read_started_us = esp_timer_get_time();
+    const int received = esp_tls_conn_read(tls, buffer, length);
+    const uint32_t read_ms = static_cast<uint32_t>((esp_timer_get_time() - read_started_us) / 1000);
+    local_wss_receive_policy::observe_read(
+        self->frame_receive_stats_, length, received,
+        ESP_TLS_ERR_SSL_WANT_READ, ESP_TLS_ERR_SSL_WANT_WRITE, read_ms);
+    const auto action = local_wss_receive_policy::read_action(
+        received, ESP_TLS_ERR_SSL_WANT_READ, ESP_TLS_ERR_SSL_WANT_WRITE);
+    if (action == local_wss_receive_policy::ReadAction::data ||
+        action == local_wss_receive_policy::ReadAction::eof)
+    {
+      self->receive_diag_fd_ = fd;
+      self->receive_diag_code_ = 0;
+      self->receive_diag_errno_ = 0;
+      self->receive_diag_eof_ = received == 0;
+      return received;
+    }
+    if (action == local_wss_receive_policy::ReadAction::fatal)
+    {
+      self->receive_diag_fd_ = fd;
+      self->receive_diag_code_ = received;
+      self->receive_diag_errno_ = errno;
+      int tls_code = 0, tls_flags = 0;
+      esp_tls_error_handle_t error_handle = nullptr;
+      esp_err_t tls_error = ESP_FAIL;
+      if (esp_tls_get_error_handle(tls, &error_handle) == ESP_OK)
+        tls_error = esp_tls_get_and_clear_last_error(error_handle, &tls_code, &tls_flags);
+      self->tls_failures_.fetch_add(1, std::memory_order_relaxed);
+      char detail[96] = "unavailable";
+      mbedtls_strerror(received, detail, sizeof(detail));
+      Serial.printf("Local WSS: TLS recv fatal fd=%d ret=%d esp=%ld tls_code=%d flags=0x%08lx detail=%s errno=%d\n",
+                    fd, received, static_cast<long>(tls_error), tls_code,
+                    static_cast<unsigned long>(tls_flags), detail, errno);
+      return HTTPD_SOCK_ERR_FAIL;
+    }
+
+    self->tls_read_waits_.fetch_add(1, std::memory_order_relaxed);
+    const uint32_t wait_ms = local_wss_receive_policy::remaining_wait(
+        started, millis(), kTlsReadWaitMs);
+    if (!wait_ms)
+    {
+      self->receive_diag_fd_ = fd;
+      self->receive_diag_code_ = HTTPD_SOCK_ERR_TIMEOUT;
+      self->receive_diag_errno_ = 0;
+      return HTTPD_SOCK_ERR_TIMEOUT;
+    }
+    fd_set readable, writable;
+    FD_ZERO(&readable);
+    FD_ZERO(&writable);
+    const bool want_write = received == ESP_TLS_ERR_SSL_WANT_WRITE ||
+                            received == -ESP_TLS_ERR_SSL_WANT_WRITE;
+    FD_SET(fd, want_write ? &writable : &readable);
+    timeval timeout{};
+    timeout.tv_sec = wait_ms / 1000;
+    timeout.tv_usec = (wait_ms % 1000) * 1000;
+    const int64_t poll_started_us = esp_timer_get_time();
+    const int ready = select(fd + 1, want_write ? nullptr : &readable,
+                             want_write ? &writable : nullptr, nullptr, &timeout);
+    const uint32_t waited_ms = static_cast<uint32_t>((esp_timer_get_time() - poll_started_us) / 1000);
+    local_wss_receive_policy::observe_poll(self->frame_receive_stats_, ready, waited_ms);
+    if (ready > 0)
+      continue;
+    if (ready < 0 && errno == EINTR)
+      continue;
+    if (ready == 0)
+    {
+      self->receive_diag_fd_ = fd;
+      self->receive_diag_code_ = HTTPD_SOCK_ERR_TIMEOUT;
+      self->receive_diag_errno_ = 0;
+      return HTTPD_SOCK_ERR_TIMEOUT;
+    }
+    self->receive_diag_fd_ = fd;
+    self->receive_diag_code_ = HTTPD_SOCK_ERR_FAIL;
+    self->receive_diag_errno_ = errno;
+    Serial.printf("Local WSS: TLS recv poll failed fd=%d errno=%d\n", fd, errno);
+    return HTTPD_SOCK_ERR_FAIL;
+  }
 }
 void LocalWssServer::taskEntry(void *context) { static_cast<LocalWssServer *>(context)->run(); }
 bool LocalWssServer::configured() const
@@ -452,14 +613,25 @@ void LocalWssServer::diagnostics() const
   const uint32_t age_ms = telemetry_.valid ? millis() - telemetry_.received_ms : 0;
   const uint32_t http_stack = http_stack_free_bytes_, mutex_misses = mutex_misses_;
   xSemaphoreGive(mutex_);
-  Serial.printf("Local WSS: clients=%u auth_fail=%lu tls_error=%lu resets=%lu telemetry_accepted=%lu telemetry_rejected=%lu app_rejected=%lu age_ms=%lu heap=%lu min_heap=%lu psram=%lu manager_stack_free_B=%lu http_stack_free_B=%lu mutex_miss=%lu snapshot_miss=%lu task_lag_max_ms=%lu ping_send_error=%lu\n",
-                clients, (unsigned long)auth_failures,
+  size_t httpd_sessions = 2;
+  int httpd_fds[2] = {-1, -1};
+  const httpd_handle_t server = server_.load(std::memory_order_acquire);
+  const esp_err_t session_list_result = server ?
+      httpd_get_client_list(server, &httpd_sessions, httpd_fds) : ESP_ERR_INVALID_STATE;
+  Serial.printf("Local WSS: clients=%u httpd_sessions=%u httpd_list_err=%ld tls_created=%lu tls_closed=%lu auth_fail=%lu tls_error=%lu resets=%lu telemetry_accepted=%lu telemetry_rejected=%lu app_rejected=%lu age_ms=%lu heap=%lu min_heap=%lu largest_internal=%lu psram=%lu manager_stack_free_B=%lu http_stack_free_B=%lu mutex_miss=%lu snapshot_miss=%lu task_lag_max_ms=%lu ping_send_error=%lu\n",
+                clients,
+                session_list_result == ESP_OK ? static_cast<unsigned>(httpd_sessions) : 0U,
+                static_cast<long>(session_list_result),
+                static_cast<unsigned long>(tls_sessions_created_.load(std::memory_order_relaxed)),
+                static_cast<unsigned long>(tls_sessions_closed_.load(std::memory_order_relaxed)),
+                (unsigned long)auth_failures,
                 (unsigned long)tls_failures_.load(std::memory_order_relaxed),
                 (unsigned long)resets,
                 (unsigned long)accepted, (unsigned long)rejected_telemetry,
                 (unsigned long)rejected,
                 (unsigned long)age_ms,
                 (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMinFreeHeap(),
+                (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
                 (unsigned long)ESP.getFreePsram(),
                 task_ ? (unsigned long)uxTaskGetStackHighWaterMark(task_) : 0UL,
                 (unsigned long)http_stack, (unsigned long)mutex_misses,
@@ -520,6 +692,7 @@ void LocalWssServer::run()
   if (!configured())
     Serial.println("Local WSS: disabled; local TLS or device configuration missing/invalid");
   uint32_t last_diag = millis();
+  uint32_t last_unclaimed_scan = millis();
   uint32_t cert_retry_at = 0;
   CertificateWindow certificate;
   time_t last_utc = 0;
@@ -635,6 +808,7 @@ void LocalWssServer::run()
       }
       httpd_ssl_stop(server_);
       server_ = nullptr;
+      for (auto &watch : unclaimed_sessions_) watch = {};
       if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(1000)) == pdTRUE)
       {
         clearSession();
@@ -662,6 +836,8 @@ void LocalWssServer::run()
       config.httpd.lru_purge_enable = false;
       config.httpd.recv_wait_timeout = 2;
       config.httpd.send_wait_timeout = 2;
+      config.httpd.global_user_ctx = this;
+      config.user_cb = tlsSession;
       config.tls_handshake_timeout_ms = 5000;
       httpd_handle_t created = nullptr;
       if (httpd_ssl_start(&created, &config) == ESP_OK)
@@ -697,10 +873,22 @@ void LocalWssServer::run()
       const uint32_t now = millis();
       if (client_fd_ >= 0 && httpd_ws_get_fd_info(server_, client_fd_) != HTTPD_WS_CLIENT_WEBSOCKET)
       {
-        Serial.printf("Local WSS: socket closed fd=%d phase=%u\n", client_fd_, static_cast<unsigned>(phase_));
-        clearSession();
+        size_t count = 2;
+        int fds[2] = {-1, -1};
+        const esp_err_t list_result = httpd_get_client_list(server_, &count, fds);
+        bool present = false;
+        if (list_result == ESP_OK)
+          for (size_t i = 0; i < count; ++i)
+            present |= fds[i] == client_fd_;
+        if (local_wss_session_policy::session_gone(list_result == ESP_OK, present))
+        {
+          Serial.printf("Local WSS: socket closed fd=%d phase=%u\n", client_fd_, static_cast<unsigned>(phase_));
+          clearSession();
+        }
       }
-      if (phase_ == Phase::Challenge && now - phase_ms_ >= kAuthTimeoutMs)
+      if (local_wss_session_policy::auth_expired(
+              client_fd_, phase_ == Phase::Ready, phase_ms_, now,
+              kAuthTimeoutMs))
       {
         ++auth_failures_;
         closeClient("auth-timeout");
@@ -721,6 +909,28 @@ void LocalWssServer::run()
             awaiting_pong_ = false;
             ++ping_send_errors_;
             Serial.printf("Local WSS: ping queue error=%ld\n", static_cast<long>(queued));
+          }
+        }
+      }
+      if (now - last_unclaimed_scan >= 500)
+      {
+        last_unclaimed_scan = now;
+        size_t count = 2;
+        int fds[2] = {-1, -1};
+        if (httpd_get_client_list(server_, &count, fds) == ESP_OK)
+        {
+          const int expired = local_wss_session_policy::expired_unclaimed(
+              unclaimed_sessions_, 2, fds, count, client_fd_, now,
+              kAuthTimeoutMs);
+          if (expired >= 0)
+          {
+            const esp_err_t close_result = httpd_sess_trigger_close(server_, expired);
+            Serial.printf("Local WSS: unclaimed session expired fd=%d age_ms>=%lu close_result=%ld\n",
+                          expired, static_cast<unsigned long>(kAuthTimeoutMs),
+                          static_cast<long>(close_result));
+            if (close_result != ESP_OK)
+              for (auto &watch : unclaimed_sessions_)
+                if (watch.fd == expired) watch.close_requested = false;
           }
         }
       }
@@ -791,16 +1001,66 @@ esp_err_t LocalWssServer::onFrame(httpd_req_t *req)
     Serial.println("Local WSS: rejected frame at STA socket gate");
     return ESP_FAIL;
   }
+  timeval read_slice{};
+  read_slice.tv_usec = local_wss_receive_policy::kSocketReadSliceMs * 1000;
+  if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &read_slice, sizeof(read_slice)) != 0)
+  {
+    Serial.printf("Local WSS: TLS receive slice setup failed fd=%d errno=%d\n", fd, errno);
+    return ESP_FAIL;
+  }
+  if (!tlsForFd(fd) ||
+      httpd_sess_set_recv_override(server_, fd, tlsReceive) != ESP_OK)
+  {
+    Serial.printf("Local WSS: TLS receive override unavailable fd=%d\n", fd);
+    return ESP_FAIL;
+  }
   if (req->method == HTTP_GET)
     return ESP_OK;
   uint8_t payload[kMaxFrame + 1] = {};
   httpd_ws_frame_t frame = {};
   frame.payload = payload;
+  receive_diag_fd_ = -1;
+  receive_diag_code_ = 0;
+  receive_diag_errno_ = 0;
+  receive_diag_eof_ = false;
+  frame_receive_stats_ = {};
+  const int64_t frame_started_us = esp_timer_get_time();
   const esp_err_t receive_error = httpd_ws_recv_frame(req, &frame, kMaxFrame);
   if (receive_error != ESP_OK)
   {
-    Serial.printf("Local WSS: rejected frame receive error=%ld\n", static_cast<long>(receive_error));
+    const auto evidence = local_wss_receive_policy::timeout_evidence(frame_receive_stats_);
+    Serial.printf("Local WSS: frame receive failed err=%ld elapsed_ms=%lu tls_rx_code=%d tls_rx_errno=%d tls_rx_eof=%u fd=%d phase=%u frame_type=%u frame_len=%u evidence=%s calls=%lu positive_reads=%lu bytes=%lu partial_reads=%lu would_block=%lu read_ms=%lu read_max_ms=%lu poll_ready=%lu poll_timeout=%lu poll_errors=%lu wait_ms=%lu last_requested=%lu last_result=%ld\n",
+                  static_cast<long>(receive_error),
+                  static_cast<unsigned long>((esp_timer_get_time() - frame_started_us) / 1000),
+                  receive_diag_fd_ == fd ? receive_diag_code_ : 0,
+                  receive_diag_fd_ == fd ? receive_diag_errno_ : 0,
+                  receive_diag_fd_ == fd && receive_diag_eof_,
+                  fd, static_cast<unsigned>(phase_), static_cast<unsigned>(frame.type),
+                  static_cast<unsigned>(frame.len),
+                  evidence == local_wss_receive_policy::TimeoutEvidence::no_bytes ? "no-tls-bytes" : "tls-bytes-seen",
+                  static_cast<unsigned long>(frame_receive_stats_.calls),
+                  static_cast<unsigned long>(frame_receive_stats_.positive_reads),
+                  static_cast<unsigned long>(frame_receive_stats_.bytes),
+                  static_cast<unsigned long>(frame_receive_stats_.partial_reads),
+                  static_cast<unsigned long>(frame_receive_stats_.would_block),
+                  static_cast<unsigned long>(frame_receive_stats_.read_ms),
+                  static_cast<unsigned long>(frame_receive_stats_.read_max_ms),
+                  static_cast<unsigned long>(frame_receive_stats_.poll_ready),
+                  static_cast<unsigned long>(frame_receive_stats_.poll_timeout),
+                  static_cast<unsigned long>(frame_receive_stats_.poll_errors),
+                  static_cast<unsigned long>(frame_receive_stats_.wait_ms),
+                  static_cast<unsigned long>(frame_receive_stats_.last_requested),
+                  static_cast<long>(frame_receive_stats_.last_result));
     return ESP_FAIL;
+  }
+  if (frame.type == HTTPD_WS_TYPE_CLOSE)
+  {
+    Serial.printf("Local WSS: peer close fd=%d phase=%u\n", fd, static_cast<unsigned>(phase_));
+    // Retain the session slot until the HTTP server has actually closed the fd.
+    // The manager's fd-info check then clears it before another peer is admitted.
+    if (server_)
+      httpd_sess_trigger_close(server_, fd);
+    return ESP_OK;
   }
   if (!frame.final || frame.len > kMaxFrame ||
       (frame.type != HTTPD_WS_TYPE_TEXT && frame.type != HTTPD_WS_TYPE_PING &&
