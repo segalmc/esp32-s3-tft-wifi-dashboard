@@ -11,6 +11,12 @@ constexpr uint8_t kVersion = 1;
 constexpr uint8_t kBoilerValid = 1;
 constexpr uint8_t kSolarValid = 2;
 constexpr uint8_t kClockValid = 4;
+constexpr uint8_t kRoleFault = 1;
+constexpr uint8_t kControllerFault = 2;
+enum class Valve : uint8_t {
+    unknown = 0, interlock = 1, opening = 2, closing = 3,
+    open_assumed = 4, closed_assumed = 5, fault = 6
+};
 constexpr size_t kMaxBatch = 20;
 constexpr uint32_t kLiveMs = 7000;
 constexpr uint32_t kDelayedMs = 15000;
@@ -54,7 +60,8 @@ inline bool valid(const Record& record, uint64_t expected_device) {
         (record.flags & ~uint8_t{kBoilerValid | kSolarValid | kClockValid}) ||
         ((record.flags & kClockValid) ? record.epoch_s < 1700000000U
                                       : record.epoch_s != 0) ||
-        record.valve > 6 ||
+        record.valve > static_cast<uint8_t>(Valve::fault) ||
+        (record.faults & ~uint8_t{kRoleFault | kControllerFault}) ||
         (record.flags & kBoilerValid &&
          (record.boiler_centi < -5000 || record.boiler_centi > 15000)) ||
         (record.flags & kSolarValid &&

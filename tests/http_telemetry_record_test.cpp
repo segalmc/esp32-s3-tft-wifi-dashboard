@@ -30,6 +30,10 @@ int main() {
     broken.valve = 7;
     seal(broken);
     assert(!valid(broken, 9));
+    broken = a;
+    broken.faults = 4;
+    seal(broken);
+    assert(!valid(broken, 9));
     Record sent[] = {a, a};
     sent[1].sequence = 2;
     seal(sent[1]);
