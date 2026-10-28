@@ -58,8 +58,8 @@ builds do not establish hardware behavior.
 
 # Local secure WebSocket server
 
-The opt-in, read-only ESP32-S3 local WSS endpoint and isolated development
-procedure are documented in [docs/LOCAL_WSS.md](docs/LOCAL_WSS.md).
+The authenticated local HTTP telemetry receiver and discovery protocol are
+documented in [docs/HTTP_TELEMETRY.md](docs/HTTP_TELEMETRY.md).
 
 The permanent rolling 24-hour TFT telemetry dashboard is documented in
 [docs/TELEMETRY_DASHBOARD.md](docs/TELEMETRY_DASHBOARD.md).

@@ -34,7 +34,6 @@ class NatureNetworkManager {
   void attachTuya(TuyaControl* control) { tuya_ = control; }
   void update();  // USB commands only; Wi-Fi and HTTP run in the network task.
   Snapshot snapshot() const;
-  void requestClockResync();
   bool copySetupPassword(char* output, size_t size) const;
   bool takeRevealRequest();
   OtaSnapshot otaSnapshot() const;
@@ -76,7 +75,6 @@ class NatureNetworkManager {
 
   mutable portMUX_TYPE snapshot_lock_ = portMUX_INITIALIZER_UNLOCKED;
   Snapshot snapshot_{State::Error, false, false, false, 0};
-  std::atomic<bool> clock_resync_requested_{false};
   OtaSnapshot ota_snapshot_{OtaPhase::Idle, 0, 0, 0};
   char ap_password_[17] = {};
   char ota_password_[21] = {};

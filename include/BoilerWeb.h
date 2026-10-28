@@ -5,10 +5,12 @@
 #include <memory>
 #include "NetworkManager.h"
 #include "TuyaControl.h"
+class LocalHttpTelemetry;
 
 class BoilerWeb {
  public:
-  void begin(NatureNetworkManager* network, TuyaControl* control);
+  void begin(NatureNetworkManager* network, TuyaControl* control,
+             LocalHttpTelemetry* telemetry);
  private:
   static void taskEntry(void* context);
   void run();
@@ -27,6 +29,7 @@ class BoilerWeb {
   static void randomHex(char* output, size_t bytes);
   NatureNetworkManager* network_ = nullptr;
   TuyaControl* control_ = nullptr;
+  LocalHttpTelemetry* telemetry_ = nullptr;
   std::unique_ptr<WebServer> server_;
   bool running_ = false;
   IPAddress bound_ip_;

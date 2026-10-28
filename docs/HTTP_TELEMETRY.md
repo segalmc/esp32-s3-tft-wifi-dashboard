@@ -1,10 +1,18 @@
-# Local HTTP telemetry migration draft
+# Local HTTP telemetry
 
-Status: **protocol record implemented and host tested; transport, durable queues, discovery, Cloudflare firmware forwarding, and TFT conversion remain open**. Do not flash these branches as a migrated pair.
+Status: **software implementation complete; hardware validation pending**. Focused host tests and firmware builds pass, but an end-to-end LAN exchange, power-loss behavior on device LittleFS and installed partition compatibility remain unverified. The S3 has no Cloudflare firmware forwarding; its local journal is bounded and has no drain. Do not treat these branches as hardware-validated.
+
+Run the focused host checks with `python3 tests/run_http_checks.py`; it fails if any expected test is missing. For local testing, the S3 journal retains all durably accepted records and has no cloud drain. Once its configured 60,000-record limit or filesystem reserve is reached, the endpoint rejects new records; the original keeps unacknowledged records and reports queue exhaustion. Do not erase acknowledged records to create space or represent this as cloud delivery. Capacity and endurance on the actual formatted filesystem are unverified.
 
 ## Verified source baseline
 
-The original `led_bench` image (ESP32 `esp32dev`) uses `BenchWss` from a separate task while its loop samples DS18B20, updates the LED-only valve simulation and reports diagnostics. The S3 `esp32-s3-n16r8-tft` image has a local WSS receiver at 9443 and a separate STA-bound `BoilerWeb` server at HTTP port 80. The latter retains local login, CSRF and Tuya status/control. Neither image has a persistent telemetry queue. The S3 firmware has no Cloudflare client. The Worker in this repository currently offers `/device/v1/:deviceId/ws`, which uses outbound-from-S3 authenticated WSS in the proposed cloud flow; browser streams use separate WebSockets. The local HTTP migration must not remove these cloud/browser contracts.
+The original `led_bench` image samples DS18B20 and updates its LED-only valve
+simulation in the control loop while separate aggregation and delivery tasks
+persist and send local telemetry. The S3 reuses its STA-bound `BoilerWeb`
+server on port 80 for challenge and telemetry endpoints and retains local
+login, CSRF and Tuya status/control. Authenticated UDP discovery uses port
+40173. The removed local WSS implementation was independent of future cloud
+or browser WebSockets; the S3 firmware still has no Cloudflare client.
 
 ## Binary record v1
 
@@ -15,26 +23,24 @@ Valve codes are 0 UNKNOWN, 1 INTERLOCK, 2 OPENING, 3 CLOSING, 4 OPEN_ASSUMED, 5 
 
 At 3 seconds, 28,800 records/day × 42 bytes = **1,209,600 bytes/day** before filesystem metadata, checkpoints and safety reserve. The original default partition is 1,441,792 bytes, so the theoretical headroom is 232,192 bytes. This is **not** a 24-hour retention guarantee; usable LittleFS capacity, segmentation, write amplification and existing partition contents have not been measured. If the existing filesystem cannot be mounted without formatting, firmware must fail closed and preserve the partition. No automatic format, erase or resize is authorized.
 
-## Proposed delivery contract and boundary
+## Delivery contract and boundary
 
-The original must append and flush each complete record before delivery. It discovers a dedicated S3 service using versioned authenticated UDP broadcast on a port distinct from the Tuya proxy's UDP 6000. HTTP `POST /api/v1/telemetry` reuses the S3's local port 80 server; batches contain at most 20 records. Each request must bind the HMAC-SHA256 to protocol version, stable device ID, a unique request nonce, exact body bytes and endpoint. The S3 must verify before parsing or accepting and reject replayed request nonces or use idempotent record identities to make replay harmless. The response must be authenticated and bind the request nonce and exact contiguous accepted record identities. A valid ACK removes only that prefix; malformed, missing or mismatched ACKs leave all records queued. Provision the shared key through ignored local configuration, independently from the Tuya key. Plain HTTP provides integrity/authentication through the MAC but no confidentiality from LAN observers.
+The original appends and flushes each complete record before delivery. It discovers the dedicated S3 service using versioned HMAC-authenticated UDP broadcast on port 40173, distinct from the Tuya proxy's UDP 6000. HTTP `POST /api/v1/telemetry` reuses the S3's local port 80 server; a fixed buffer limits each batch to 20 records. A short-lived challenge nonce provides request replay protection. HMAC-SHA256 covers the exact batch header and records; the header binds protocol version, stable device ID, sender boot, uptime and challenge. The S3 verifies framing, MAC and challenge before accepting records. The signed response binds that challenge and the last identity in the contiguous accepted prefix. A valid ACK removes only that prefix; malformed, interrupted, missing or mismatched ACKs leave records queued. Provision the shared key through ignored local configuration, independently from the Tuya key. Plain HTTP provides integrity/authentication but no confidentiality from LAN observers.
 
-The S3 persistence boundary is its local durable journal and deduplication state, flushed before ACK. Its cloud forwarding worker drains that journal independently, so a Cloudflare outage cannot reject local telemetry solely because cloud is unavailable. Cloud delivery remains at least once unless the existing Worker can prove an end-to-end idempotent durable acknowledgement for each record. The TFT uses only the newest generation, not reception time of an old backlog item. With trusted generation age, health is LIVE through 7 s, DELAYED through 15 s, STALE through 30 s, then OFFLINE; no sample is UNKNOWN. Untrusted generation age is conservatively OFFLINE. A delayed historical record cannot make the screen LIVE.
+The S3 persistence boundary is its fsynced local journal and recovered deduplication state. It sends an ACK only after each named record is present there. The current local-test mode has no journal drain: at 60,000 records or when the 8 KiB filesystem reserve is reached, the S3 returns a storage rejection and the original retains its unacknowledged prefix. This is not cloud delivery. The TFT uses only a record generated in the current sender boot and within 30 seconds of the request uptime; historical backlog remains durable but cannot overwrite the live measurement. Communication is LIVE through 35 seconds after telemetry or heartbeat, DELAYED through 75 seconds, then OFFLINE. Measurement freshness is tracked separately with LIVE, DELAYED and STALE states.
 
 ```mermaid
 sequenceDiagram
     participant E as Original ESP32
     participant J as Original journal
     participant S as S3 HTTP and durable journal
-    participant C as Cloudflare Worker
-    E->>J: Append and flush 3-second record
+    E->>J: Append and flush meaningful record
     E->>S: Signed UDP discovery with nonce
     S-->>E: Signed service identity, port and nonce
     E->>S: Signed HTTP batch (up to 20)
     S->>S: Authenticate, validate, deduplicate, persist and flush
     S-->>E: Signed ACK of durable contiguous prefix
     E->>J: Persist ACK checkpoint, reclaim acknowledged data
-    S->>C: Independent authenticated HTTPS/WSS forwarding
 ```
 
 ## Diagnostics and recovery checklist
@@ -45,8 +51,8 @@ sequenceDiagram
 - ACK failure: compare request nonce, batch prefix identities, response MAC and durable checkpoint result. Retry with backoff and jitter; never delete by HTTP status alone.
 - Authentication failure: verify provisioned identities and key rotation state without printing keys or payload MACs.
 - TFT STALE: compare source generation time, age, sequence and backlog status. A newly received old item remains historical.
-- Cloudflare unavailable: inspect independent forwarding queue and Worker authentication; local reception and Tuya safety remain separate.
+- Queue full: the S3 returns no durable ACK for unaccepted records; inspect its bounded journal before any separately designed drain or migration. Never erase it to simulate forwarding.
 
 ## Verification status
 
-Portable record tests pass in both repositories. Baseline PlatformIO builds pass using links to existing ignored local configuration; no new transport code is in those images. No hardware upload, serial monitoring, live HTTP exchange, cloud deployment, flash capacity test or soak was performed for this migration.
+The explicit host runners pass record, HMAC, discovery validation, replay, malformed framing, timeout configuration, interrupted ACK, journal recovery, queue-full, duplicate/restart, lost-ACK, reporting and TFT freshness checks. Both migrated PlatformIO images build. Host tests reuse the production protocol, journal and acceptance components, while Arduino `HTTPClient`, `WebServer` and `WiFiUDP` behavior is limited to compile and call-site checks. No hardware upload, serial monitoring, live HTTP exchange, flash-capacity test or soak was performed.

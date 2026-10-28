@@ -6,7 +6,7 @@
 #if TFT_HARDWARE_ENABLED
 #include "NetworkManager.h"
 #include "TuyaControl.h"
-#include "LocalWssServer.h"
+#include "LocalHttpTelemetry.h"
 #include "TemperatureHistory.h"
 #include <TFT_eSPI.h>
 #endif
@@ -22,7 +22,7 @@ class DisplayManager {
   void updateOta(NatureNetworkManager::OtaSnapshot ota, const char* password,
                  bool reveal, uint32_t now_ms);
   void updateBoiler(TuyaControl::Snapshot state);
-  void updateTelemetry(LocalWssServer::Telemetry state);
+  void updateTelemetry(LocalHttpTelemetry::Snapshot state);
   uint32_t lastRefreshUs() const { return last_refresh_us_; }
 #endif
 
@@ -56,7 +56,7 @@ class DisplayManager {
   uint32_t last_refresh_us_ = 0;
   uint32_t last_dashboard_ms_ = 0;
   TuyaControl::Snapshot boiler_state_{};
-  LocalWssServer::Telemetry telemetry_state_{};
+  LocalHttpTelemetry::Snapshot telemetry_state_{};
   TemperatureHistory* history_ = nullptr;
   bool first_chart_refresh_ = true;
   char telemetry_lines_[12][64] = {};
@@ -65,6 +65,6 @@ class DisplayManager {
   uint32_t last_chart_draw_ms_ = 0;
   int64_t last_history_expire_second_ = 0;
   uint32_t last_telemetry_sequence_ = 0;
-  char last_telemetry_session_[37] = {};
+  uint64_t last_telemetry_boot_ = 0;
 #endif
 };

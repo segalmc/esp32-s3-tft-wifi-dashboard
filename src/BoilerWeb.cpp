@@ -2,6 +2,7 @@
 #if TFT_HARDWARE_ENABLED
 #include "BoilerWebPolicy.h"
 #include "BoilerWebApi.h"
+#include "LocalHttpTelemetry.h"
 #include "BoilerPolicy.h"
 #include "BoilerDashboardPage.h"
 #include <ArduinoJson.h>
@@ -24,9 +25,11 @@ const char* otaPhaseName(NatureNetworkManager::OtaPhase phase) {
 }
 }  // namespace
 
-void BoilerWeb::begin(NatureNetworkManager* network, TuyaControl* control) {
+void BoilerWeb::begin(NatureNetworkManager* network, TuyaControl* control,
+                      LocalHttpTelemetry* telemetry) {
   network_ = network;
   control_ = control;
+  telemetry_ = telemetry;
   randomHex(login_csrf_, 16);
   if (xTaskCreate(taskEntry, "boiler-web", 9216, this, 1, nullptr) != pdPASS)
     Serial.println("Boiler Web: task unavailable");
@@ -77,6 +80,11 @@ void BoilerWeb::configure() {
   server_->on("/logout", HTTP_POST, [this] { logout(); });
   server_->on("/api/status", HTTP_GET, [this] { status(); });
   server_->on("/api/command", HTTP_POST, [this] { command(); });
+  server_->on("/api/v1/telemetry/challenge", HTTP_GET,
+              [this] { telemetry_->challenge(*server_); });
+  server_->on("/api/v1/telemetry", HTTP_POST,
+              [this] { telemetry_->receive(*server_); },
+              [this] { telemetry_->onRaw(*server_); });
   server_->onNotFound([this] { reject(404, "not found"); });
 }
 void BoilerWeb::headers() {

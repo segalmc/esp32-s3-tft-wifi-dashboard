@@ -217,8 +217,8 @@ void NatureNetworkManager::run() {
 void NatureNetworkManager::startConnection(uint32_t now) {
   stopOta();
   WiFi.mode(snapshot().ap_active ? WIFI_AP_STA : WIFI_STA);
-  // The USB-powered WSS listener must be able to receive client frames and
-  // reconnect handshakes without STA modem-sleep delivery latency.
+  // Local HTTP and UDP discovery should not inherit modem-sleep delivery
+  // latency while the USB-powered dashboard is acting as a LAN endpoint.
   const bool sleep_disabled = WiFi.setSleep(false);
   Serial.printf("Wi-Fi: STA modem sleep disabled=%u\n", sleep_disabled && WiFi.getSleep() == WIFI_PS_NONE);
   WiFi.begin(saved_.ssid, saved_.password);
@@ -230,8 +230,8 @@ void NatureNetworkManager::startConnection(uint32_t now) {
 void NatureNetworkManager::startPortal() {
   if (snapshot().ap_active) return;
   stopOta();  // ArduinoOTA's UDP listener otherwise accepts AP clients too.
-  // Publish the AP transition before enabling the radio so the WSS route
-  // rejects upgrades through the setup interface throughout startup.
+  // Publish the AP transition before enabling the radio so local services
+  // reject setup-interface traffic throughout startup.
   portENTER_CRITICAL(&snapshot_lock_);
   snapshot_.ap_active = true;
   portEXIT_CRITICAL(&snapshot_lock_);
@@ -357,11 +357,6 @@ void NatureNetworkManager::tick(uint32_t now) {
       setState(State::Online);
       startClock();
       if (snapshot().ap_active && !portal_manual_ && !portal_closing_) stopPortal();
-    }
-    if (clock_resync_requested_.exchange(false, std::memory_order_acq_rel)) {
-      Serial.println("Wi-Fi: WSS requested fresh clock synchronization");
-      startClock();
-      return;  // Leave the clock gate closed until a later SNTP completion.
     }
     checkClock(now);
     return;
@@ -711,10 +706,6 @@ void NatureNetworkManager::startClock() {
   portENTER_CRITICAL(&snapshot_lock_);
   snapshot_.clock_synced = false;
   portEXIT_CRITICAL(&snapshot_lock_);
-}
-
-void NatureNetworkManager::requestClockResync() {
-  clock_resync_requested_.store(true, std::memory_order_release);
 }
 
 void NatureNetworkManager::checkClock(uint32_t now) {

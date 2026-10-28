@@ -4,6 +4,7 @@
 
 #if TFT_HARDWARE_ENABLED
 #include "BackgroundAsset.h"
+#include "HttpTelemetryFreshness.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -358,7 +359,7 @@ void DisplayManager::updateBoiler(TuyaControl::Snapshot state)
   boiler_state_ = state;
 }
 
-void DisplayManager::updateTelemetry(LocalWssServer::Telemetry state)
+void DisplayManager::updateTelemetry(LocalHttpTelemetry::Snapshot state)
 {
   if (!state.snapshot_ok)
     return;
@@ -369,23 +370,27 @@ void DisplayManager::updateTelemetry(LocalWssServer::Telemetry state)
     history_->expire(now);
     last_history_expire_second_ = now;
   }
-  if (!history_ || !state.valid || !state.observed_epoch)
+  if (!history_ || !state.ever_measurement || !state.epoch_s)
     return;
-  if (strcmp(last_telemetry_session_, state.device_session_id) == 0 &&
+  if (last_telemetry_boot_ == state.boot_nonce &&
       last_telemetry_sequence_ == state.sequence)
     return;
-  strncpy(last_telemetry_session_, state.device_session_id,
-          sizeof(last_telemetry_session_) - 1);
+  last_telemetry_boot_ = state.boot_nonce;
   last_telemetry_sequence_ = state.sequence;
-  if (history_->add(state.observed_epoch, now, state.boiler_c,
-                    state.solar_c, !state.stale && strcmp(state.quality, "reported") == 0))
+  if (history_->add(state.epoch_s, now, state.boiler_c,
+                    state.solar_c, !state.sensor_fault))
     chart_dirty_ = true;
 }
 
 void DisplayManager::drawTelemetryPage(bool chart)
 {
   const auto &state = telemetry_state_;
-  const bool stale = !state.valid || state.stale || !state.connected;
+  const auto comm = http_telemetry::communication(
+      state.ever_message, millis() - state.communication_ms);
+  const auto measurement = http_telemetry::measurement(
+      state.ever_measurement, millis() - state.measurement_ms);
+  const bool stale = measurement == http_telemetry::Measurement::stale ||
+                     measurement == http_telemetry::Measurement::unknown;
   char label[64];
   auto line = [&](unsigned index, const char *value, int x, int y, int width,
                   int height, uint16_t color, uint8_t font)
@@ -404,9 +409,10 @@ void DisplayManager::drawTelemetryPage(bool chart)
   char clock[8] = "--:--";
   if (now >= 1700000000 && localtime_r(&now, &local))
     snprintf(clock, sizeof(clock), "%02d:%02d", local.tm_hour, local.tm_min);
-  snprintf(label, sizeof(label), "%s  WSS %s  %s", network_status_,
-           state.connected ? "LIVE" : "OFF", clock);
-  line(0, label, 16, 35, 288, 16, state.connected ? TFT_GREEN : kOrange, 2);
+  snprintf(label, sizeof(label), "%s  HTTP %s  %s", network_status_,
+           http_telemetry::name(comm), clock);
+  line(0, label, 16, 35, 288, 16,
+       comm == http_telemetry::Communication::live ? TFT_GREEN : kOrange, 2);
   if (!setup_panel_visible_ && !ota_panel_visible_)
   {
     if (!stale && isfinite(state.boiler_c))
@@ -432,29 +438,22 @@ void DisplayManager::drawTelemetryPage(bool chart)
   else
     strlcpy(label, "Auto off: idle", sizeof(label));
   line(4, label, 16, 198, 288, 10, TFT_WHITE, 1);
-  line(5, stale ? "UNKNOWN" : state.valve, 16, 240, 135, 22,
+  const char* valve_names[] = {"UNKNOWN", "INTERLOCK", "OPENING", "CLOSING",
+                               "OPEN ASSUMED", "CLOSED ASSUMED", "FAULT"};
+  line(5, stale || state.valve > 6 ? "UNKNOWN" : valve_names[state.valve], 16, 240, 135, 22,
        stale ? kOrange : TFT_GREEN, 2);
-  line(6, stale ? "UNKNOWN" : state.manual ? "MANUAL"
-                                           : "AUTO",
+  line(6, state.sensor_fault ? "SENSOR FAULT" : stale ? "UNKNOWN" : "AUTO",
        171, 240,
        135, 22, TFT_WHITE, 2);
-  const uint32_t age_seconds =
-      state.valid ? (millis() - state.received_ms) / 1000 : 0;
-
-  if (state.connected && !stale)
-  {
-    snprintf(label, sizeof(label),
-             "WSS LIVE | age %lus | drops %lu",
-             static_cast<unsigned long>(age_seconds),
-             static_cast<unsigned long>(state.wss_resets));
-  }
-  else
-  {
-    snprintf(label, sizeof(label),
-             "WSS DOWN | age %s | drops %lu",
-             state.valid ? String(age_seconds).c_str() : "--",
-             static_cast<unsigned long>(state.wss_resets));
-  }
+  const uint32_t comm_age = state.ever_message ?
+      (millis() - state.communication_ms) / 1000 : 0;
+  const uint32_t measurement_age = state.ever_measurement ?
+      (millis() - state.measurement_ms) / 1000 : 0;
+  snprintf(label, sizeof(label), "C:%s %lus M:%s %lus%s",
+           http_telemetry::name(comm), static_cast<unsigned long>(comm_age),
+           http_telemetry::name(measurement),
+           static_cast<unsigned long>(measurement_age),
+           comm == http_telemetry::Communication::live && stale ? " BACKLOG" : "");
 
   line(7, label, 16, 283, 288, 18,
        stale ? kOrange : TFT_GREEN, 2);
