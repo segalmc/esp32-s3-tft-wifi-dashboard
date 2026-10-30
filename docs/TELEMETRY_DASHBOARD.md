@@ -1,43 +1,55 @@
 # Permanent local telemetry TFT dashboard
 
-The 320 x 480 ST7796S shows one dashboard throughout normal operation. Its
-layout follows the approved `hot-water-platform/docs/reference/dashboard-design.png`
-concept, adapted to portrait orientation. The scenic photo is sent from flash
-once at startup; opaque field panels and the graph are updated in place.
-There is no timed page switch, touch navigation, or normal-operation diagnostics
-screen. An explicit Wi-Fi setup password or OTA recovery panel can temporarily
-cover the temperature cards; the dashboard is restored when it closes.
+The installed ST7796S uses a 320 × 480 portrait viewport. The scenic RGB565
+asset is sent once at startup. Opaque panels and text fields are updated in
+place; no chart plotting scan, timed page switch or touch navigation runs on
+the normal dashboard. Setup and OTA password/progress panels can temporarily
+cover the temperature values and restore the dashboard afterward.
 
-The permanent screen contains boiler and solar temperatures, the Tuya relay and
-auto-off countdown, valve and mode, communication and measurement freshness, and two
-rolling 24-hour temperature curves. The single bottom panel shows the S3 IP,
-the authenticated boiler ESP32 peer IP, Tuya status, and uptime. The peer IP is
-shown only after authenticated HTTP telemetry. An unavailable reading is displayed as
-unknown or a dash; stale telemetry is never presented as current.
+| Portrait region | Contents | Source |
+| --- | --- | --- |
+| Header, y=8–52 | HOT WATER, compact Wi-Fi state and clock | Network manager; local time |
+| Two large cards, y=58–206 | BOILER and SOLAR numeric °C, DS18B20 quality | Authenticated original ESP32 telemetry snapshot |
+| Two status cards, y=212–306 | BOILER RELAY ON/OFF/UNKNOWN and auto-off obligation; LED VALVE OPEN/CLOSED/OPENING/CLOSING/UNKNOWN/FAULT | Confirmed fresh Tuya status; inferred LED bench record code |
+| Controller card, y=312–385 | ESP-NOW/HTTP FALLBACK/OFFLINE and sample age/freshness | ESP-NOW/HTTP receiver snapshot |
+| Footer, y=391–472 | S3 IP, last received transport, uptime and Tuya verification | Network, receiver and Tuya status |
 
-`LocalHttpTelemetry::snapshot()` copies a short-lived state snapshot under its
-mutex. A missed lock is marked `snapshot_ok=false`, so it cannot briefly paint
-a false disconnection. The HTTP receiver shares the existing STA-bound port 80
-server, while authenticated UDP discovery runs in its own task. Neither path
-initializes or resets in response to a display update. The chart uses a fixed 1,440-minute
-PSRAM ring, scans at most one day of buckets, and redraws no more often than
-15 seconds when data changes. It never writes history to NVS or flash.
+The valve card is explicitly labeled `LED VALVE` and `SIMULATED / NO MOTOR`.
+OPEN and CLOSED are inferred LED-bench states, **not physical valve-position
+measurements**. The relay card uses the existing Tuya snapshot and shows
+UNKNOWN unless its last authenticated state is connected, fresh and no command
+is pending. The display
+does not issue any command.
 
-The TFT treats a valid heartbeat as communication liveness without replacing
-temperatures or valve state. Fresh current records may advance measurement
-state; queued historical records are accepted durably but cannot make the
-display current because their producer boot and uptime do not match the live
-request window. Communication is LIVE through 35 seconds, DELAYED through 75
-seconds, then OFFLINE. Measurement freshness is tracked separately.
+The TFT uses the same `OriginalTelemetryApi::view` as authenticated
+`GET /api/status`: communication is connected through 35 seconds after an
+authenticated message, while a measurement is fresh only when its effective
+age is at most 7 seconds. Effective age includes the record's age at receipt.
+Only finite, valid-flagged readings in −50…150°C are shown while fresh.
+Missing, invalid, stale or disconnected readings become `--.-`; their LED
+valve state becomes UNKNOWN. The link indicator remains independent of sample
+freshness, so it can be green while the sample reads STALE. The original LED
+bench sender now queues a full measurement every 3 seconds while either sensor
+has a valid recent observation, even at unchanged temperature. No DEMO value
+enters this display. A heartbeat cannot refresh an old measurement.
 
-Build: `pio run -e esp32-s3-n16r8-tft`. On the isolated development board,
-verify the partition table against the installed layout before uploading an
-app-only image, and preserve NVS. Capture at least five uninterrupted minutes
-of 115200-baud serial output while the graph redraws. Confirm one visible
-screen, authenticated HTTP delivery, bounded queue depth and heartbeat timing,
-no Wi-Fi reconnect, no watchdog reset, and stable heap. The source checkout was
-built successfully, but this HTTP firmware has not yet been flashed or observed
-on POC hardware.
+`TemperatureHistory` remains allocated in PSRAM and receives/ages the same
+trusted records as before. The bounded S3 journal and any backend reporting
+are unchanged. Removing the chart eliminates its minute scans, plot draws,
+15-second redraw timer and chart-specific PSRAM warning. Normal text updates
+occur at most once per second and only when the field text or color changes.
 
-Host history test: `g++ -std=c++17 -Iinclude tools/test_temperature_history.cpp
--o /tmp/hwp_temperature_history_test && /tmp/hwp_temperature_history_test`.
+Geometry is defined in `include/TftDashboardLayout.h` with compile-time bounds
+and separation assertions. Implementation is in `src/DisplayManager.cpp` and
+`include/DisplayManager.h`. The web dashboard and Android tablet layout were
+not changed for this TFT redesign.
+
+Offline checks passed: 13 S3 telemetry host tests, the boiler-policy test,
+the temperature-history test and the background-asset test. Both
+`esp32-s3-n16r8-tft` and `esp32-s3-n16r8-tft-ota` firmware builds passed.
+The redesigned screen has **not been flashed or visually verified on hardware**.
+The read-only physical login probe confirmed that the password currently
+accepted by the S3 does **not** match the hash embedded in this build. This
+image must not be flashed. Credential configuration needs a separately
+approved, secure correction and a new build before any separately approved
+flash. USB recovery and partition preflight are described in `docs/ota.md`.

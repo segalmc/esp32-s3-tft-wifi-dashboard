@@ -17,6 +17,10 @@ TESTS = (
     "http_telemetry_acceptance_test.cpp",
     "http_telemetry_integration_test.cpp",
     "http_telemetry_freshness_test.cpp",
+    "now_telemetry_protocol_test.cpp",
+    "controller_link_status_test.cpp",
+    "original_telemetry_api_test.cpp",
+    "now_replay_guard_test.cpp",
 )
 with tempfile.TemporaryDirectory(prefix="hwp-s3-http-check-") as directory:
     for name in TESTS:
@@ -34,6 +38,8 @@ with tempfile.TemporaryDirectory(prefix="hwp-s3-http-check-") as directory:
                 raise SystemExit("missing host mbedcrypto library or PlatformIO headers")
             command += [f"-I{headers}"]
         command += [str(source), "-o", str(binary)]
+        if name == "original_telemetry_api_test.cpp":
+            command.insert(4, f"-I{HERE.parent / '.pio/libdeps/esp32-s3-n16r8-tft-ota/ArduinoJson/src'}")
         if crypto:
             command += [f"-Wl,-l:{MBEDCRYPTO}"]
         subprocess.run(command, check=True)

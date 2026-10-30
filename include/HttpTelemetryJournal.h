@@ -27,6 +27,7 @@ public:
 
 class Journal {
 public:
+    enum class FullPolicy { reject, retain_recent };
     static constexpr size_t kSegmentRecords = 128;
     static constexpr uint32_t kMagic = 0x48575051; // HWPQ
     struct Meta {
@@ -39,8 +40,10 @@ public:
     };
     static_assert(sizeof(Meta) == 24, "Journal metadata layout changed");
 
-    Journal(JournalStore& store, uint64_t device_id, size_t max_pending)
-        : store_(store), device_id_(device_id), max_pending_(max_pending) {}
+    Journal(JournalStore& store, uint64_t device_id, size_t max_pending,
+            FullPolicy full_policy = FullPolicy::reject)
+        : store_(store), device_id_(device_id), max_pending_(max_pending),
+          full_policy_(full_policy) {}
 
     bool begin() {
         Meta a{}, b{};
@@ -94,7 +97,10 @@ public:
 
     bool append(const Record& record) {
         if (!ready_ || !valid(record, device_id_)) return false;
-        if (pending_ >= max_pending_) { ++overflow_; return false; }
+        if (pending_ >= max_pending_ &&
+            (full_policy_ != FullPolicy::retain_recent || !trim_oldest_segment())) {
+            ++overflow_; return false;
+        }
         size_t bytes = 0;
         if (!store_.size(meta_.tail_segment, bytes) || bytes % sizeof(Record))
             return false;
@@ -227,6 +233,35 @@ public:
     bool ready() const { return ready_; }
 
 private:
+    // Checkpoint the new head before deleting the old segment. After a crash,
+    // either metadata still references the intact old segment or the newer
+    // checkpoint references the intact next segment.
+    bool trim_oldest_segment() {
+        if (!ready_ || meta_.head_segment >= meta_.tail_segment ||
+            meta_.generation == UINT32_MAX) return false;
+        size_t bytes = 0;
+        if (!store_.size(meta_.head_segment, bytes) ||
+            bytes % sizeof(Record) ||
+            bytes / sizeof(Record) < meta_.head_index) return false;
+        const size_t removed = bytes / sizeof(Record) - meta_.head_index;
+        if (!removed || removed > pending_) return false;
+        Meta next = meta_;
+        ++next.head_segment;
+        next.head_index = 0;
+        ++next.generation;
+        seal_meta(next);
+        const unsigned other = slot_ ^ 1U;
+        if (!store_.write_meta(other, &next, sizeof(next))) {
+            ready_ = false;
+            return false;
+        }
+        const uint32_t old_head = meta_.head_segment;
+        meta_ = next;
+        slot_ = other;
+        pending_ -= removed;
+        if (!store_.remove(old_head)) ++cleanup_errors_;
+        return true;
+    }
     static bool meta_valid(const Meta& m) {
         return m.magic == kMagic && m.generation &&
                m.crc == checksum(&m, offsetof(Meta, crc));
@@ -235,6 +270,7 @@ private:
     JournalStore& store_;
     const uint64_t device_id_;
     const size_t max_pending_;
+    const FullPolicy full_policy_;
     Meta meta_{};
     unsigned slot_ = 0;
     size_t pending_ = 0;

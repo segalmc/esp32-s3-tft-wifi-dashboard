@@ -7,6 +7,7 @@ using namespace http_telemetry;
 struct MemoryStore final : JournalStore {
     std::map<uint32_t, std::vector<uint8_t>> segments;
     std::vector<uint8_t> metadata[2];
+    bool fail_meta = false;
     bool has_any() override { return !segments.empty() || !metadata[0].empty() || !metadata[1].empty(); }
     bool exists(uint32_t s) override { return segments.count(s); }
     bool size(uint32_t s, size_t& n) override { if (!exists(s)) return false; n=segments[s].size(); return true; }
@@ -28,6 +29,7 @@ struct MemoryStore final : JournalStore {
         return true;
     }
     bool write_meta(unsigned s,const void* in,size_t n) override {
+        if (fail_meta) return false;
         auto* p=static_cast<const uint8_t*>(in); metadata[s].assign(p,p+n); return true;
     }
 };
@@ -63,5 +65,28 @@ int main() {
     request.sender_uptime_ms=50200;
     accepted=accept_batch(restarted,request,&new_boot,3);
     assert(accepted.count==0 && accepted.storage_error && restarted.pending()==3);
+    MemoryStore retained_store;
+    Journal retained(retained_store,3,130,Journal::FullPolicy::retain_recent);
+    assert(retained.begin());
+    for (uint32_t sequence=1; sequence<=131; ++sequence)
+        assert(retained.append(record(sequence)));
+    assert(retained.pending()==3); // First durable 128-record segment retired.
+    bool present=false;
+    assert(retained.contains(record(1),present) && !present);
+    assert(retained.contains(record(131),present) && present);
+    Journal retained_restart(retained_store,3,130,Journal::FullPolicy::retain_recent);
+    assert(retained_restart.begin() && retained_restart.pending()==3);
+    Record latest{};
+    assert(retained_restart.latest(latest) && latest.sequence==131);
+    MemoryStore failed_store;
+    Journal failed_trim(failed_store,3,130,Journal::FullPolicy::retain_recent);
+    assert(failed_trim.begin());
+    for (uint32_t sequence=1; sequence<=130; ++sequence)
+        assert(failed_trim.append(record(sequence)));
+    failed_store.fail_meta=true;
+    assert(!failed_trim.append(record(131)) && !failed_trim.ready());
+    failed_store.fail_meta=false;
+    Journal failed_restart(failed_store,3,130,Journal::FullPolicy::retain_recent);
+    assert(failed_restart.begin() && failed_restart.pending()==130);
     return 0;
 }

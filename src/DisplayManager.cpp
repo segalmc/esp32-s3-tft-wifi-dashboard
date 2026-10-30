@@ -3,8 +3,11 @@
 #include <Arduino.h>
 
 #if TFT_HARDWARE_ENABLED
+#include "ControllerLinkStatus.h"
 #include "BackgroundAsset.h"
-#include "HttpTelemetryFreshness.h"
+#include "BoilerPolicy.h"
+#include "OriginalTelemetryApi.h"
+#include "TftDashboardLayout.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -17,7 +20,6 @@
 namespace
 {
   constexpr uint32_t kDashboardIntervalMs = 1000;
-  constexpr uint32_t kChartRedrawIntervalMs = 15000;
   constexpr uint16_t kNavy = 0x08C9;
   constexpr uint16_t kTurquoise = 0x4EBA;
   constexpr uint16_t kOrange = 0xFD2C;
@@ -42,7 +44,7 @@ void DisplayManager::begin()
   if (memory)
     history_ = new (memory) TemperatureHistory();
   else
-    Serial.println("TFT: 24-hour chart PSRAM unavailable");
+    Serial.println("TFT: 24-hour history PSRAM unavailable");
   Serial.printf("TFT: initializing ST7796S at 10 MHz, rotation %d\n", TFT_ROTATION);
   tft_.init();
   tft_.setRotation(TFT_ROTATION);
@@ -62,23 +64,9 @@ void DisplayManager::update(uint32_t now_ms)
   if (static_cast<uint32_t>(now_ms - last_dashboard_ms_) < kDashboardIntervalMs)
     return;
   last_dashboard_ms_ = now_ms;
-  const time_t now = time(nullptr);
-  const int64_t minute = now >= 1700000000 ? now / 60 : -1;
-  if (minute != chart_minute_)
-  {
-    chart_minute_ = minute;
-    chart_dirty_ = true;
-  }
   const uint32_t redraw_started = micros();
-  const bool draw_chart = chart_dirty_ &&
-                          (first_chart_refresh_ || now_ms - last_chart_draw_ms_ >= kChartRedrawIntervalMs);
-  drawTelemetryPage(draw_chart);
+  drawTelemetryPage();
   last_refresh_us_ = micros() - redraw_started;
-  if (draw_chart)
-  {
-    chart_dirty_ = false;
-    last_chart_draw_ms_ = now_ms;
-  }
 #else
   (void)now_ms;
 #endif
@@ -111,35 +99,34 @@ void DisplayManager::drawDashboardFrame()
     tft_.fillScreen(kNavy);
   }
 
-  // The scenic image stays in flash and is sent only once at startup. Small
-  // opaque panels make every later update independent of the source image.
-  tft_.fillRoundRect(8, 8, 304, 46, 8, kNavy);
-  tft_.fillRoundRect(8, 61, 149, 87, 8, kNavy);
-  tft_.fillRoundRect(163, 61, 149, 87, 8, kNavy);
-  tft_.fillRoundRect(8, 154, 304, 53, 8, kNavy);
-  tft_.fillRoundRect(8, 213, 149, 55, 8, kNavy);
-  tft_.fillRoundRect(163, 213, 149, 55, 8, kNavy);
-  tft_.fillRoundRect(8, 274, 304, 34, 8, kNavy);
-  tft_.fillRoundRect(8, 314, 304, 112, 8, kNavy);
-  tft_.fillRoundRect(8, 432, 304, 40, 8, kNavy);
+  // The scenic image is sent once. Opaque panels and changed fields keep
+  // subsequent updates small and independent of the photo asset.
+  using namespace tft_dashboard_layout;
+  for (const Rect panel : {header, boiler, solar, relay, led_valve, controller, footer})
+    tft_.fillRoundRect(panel.x, panel.y, panel.width, panel.height, 8, kNavy);
+  tft_.drawRoundRect(boiler.x, boiler.y, boiler.width, boiler.height, 8, kTurquoise);
+  tft_.drawRoundRect(solar.x, solar.y, solar.width, solar.height, 8, kTurquoise);
   tft_.setTextFont(2);
   tft_.setTextSize(1);
   tft_.setTextColor(TFT_WHITE, kNavy);
-  tft_.drawString("HOT WATER CONTROL", 16, 14);
+  tft_.drawString("HOT WATER", 16, 14);
   tft_.setTextColor(kTurquoise, kNavy);
-  tft_.drawString("BOILER TEMP", 16, 65);
-  tft_.drawString("SOLAR TEMP", 171, 65);
-  tft_.drawString("BOILER SWITCH (TUYA)", 16, 158);
-  tft_.drawString("VALVE", 16, 218);
-  tft_.drawString("MODE", 171, 218);
-  tft_.drawString("TEMPERATURE / LAST 24 HOURS", 16, 317);
+  tft_.drawString("BOILER", 16, 67);
+  tft_.drawString("SOLAR", 171, 67);
+  tft_.drawString("BOILER RELAY", 16, 220);
+  tft_.drawString("LED VALVE", 171, 220);
+  tft_.drawString("ESP32 CONTROLLER", 16, 319);
+  tft_.drawCircle(132, 169, 2, kTurquoise);
+  tft_.drawString("C", 138, 162);
+  tft_.drawCircle(287, 169, 2, kTurquoise);
+  tft_.drawString("C", 293, 162);
   tft_.setTextFont(1);
-  tft_.drawString("ESP32-S3", 14, 436);
-  tft_.drawString("BOILER ESP32", 116, 436);
-  tft_.drawString("TUYA / UPTIME", 225, 436);
+  tft_.setTextColor(TFT_WHITE, kNavy);
+  tft_.drawString("SIMULATED / NO MOTOR", 171, 283);
+  tft_.drawString("S3 IP", 16, 399);
+  tft_.drawString("LAST RX", 171, 399);
   memset(telemetry_lines_, 0, sizeof(telemetry_lines_));
-  first_chart_refresh_ = true;
-  chart_dirty_ = true;
+  memset(telemetry_colors_, 0, sizeof(telemetry_colors_));
   Serial.printf("TFT: frame=%lu us, heap=%lu B, PSRAM=%lu/%lu B, photo=%s\n",
                 static_cast<unsigned long>(micros() - started_us), static_cast<unsigned long>(ESP.getFreeHeap()),
                 static_cast<unsigned long>(ESP.getFreePsram()), static_cast<unsigned long>(ESP.getPsramSize()),
@@ -176,11 +163,8 @@ void DisplayManager::drawSetupPanel(bool visible)
 
 void DisplayManager::restoreTopPanelRegion()
 {
-  // This is the same even-width photo region used by the temporary AP panel.
-  if (background_ready_)
-    streamAssetRegion(kPhotoOnlyPixels, 20, 90, 280, 60);
-  else
-    tft_.fillRect(20, 90, 280, 60, kNavy);
+  // The temporary setup/OTA panel overlays two opaque temperature cards.
+  tft_.fillRect(20, 90, 280, 60, kNavy);
 }
 
 void DisplayManager::updateClock(bool, uint32_t) {}
@@ -333,27 +317,6 @@ void DisplayManager::updateOta(NatureNetworkManager::OtaSnapshot ota, const char
   }
 }
 
-void DisplayManager::streamAssetRegion(const uint16_t *pixels, int16_t x,
-                                       int16_t y, int16_t width,
-                                       int16_t height)
-{
-  // The asset stride is always 320, even for a narrow card region. A single
-  // address window keeps adjacent scan lines contiguous on the display.
-  alignas(4) uint16_t row[kBackgroundWidth];
-  tft_.startWrite();
-  tft_.setAddrWindow(x, y, width, height);
-  for (int16_t line = 0; line < height; ++line)
-  {
-    const size_t source = static_cast<size_t>(y + line) * kBackgroundWidth + x;
-    for (int16_t column = 0; column < width; ++column)
-    {
-      row[column] = pgm_read_word(&pixels[source + column]);
-    }
-    tft_.pushPixels(row, width);
-  }
-  tft_.endWrite();
-}
-
 void DisplayManager::updateBoiler(TuyaControl::Snapshot state)
 {
   boiler_state_ = state;
@@ -377,196 +340,137 @@ void DisplayManager::updateTelemetry(LocalHttpTelemetry::Snapshot state)
     return;
   last_telemetry_boot_ = state.boot_nonce;
   last_telemetry_sequence_ = state.sequence;
-  if (history_->add(state.epoch_s, now, state.boiler_c,
-                    state.solar_c, !state.sensor_fault))
-    chart_dirty_ = true;
+  history_->add(state.epoch_s, now, state.boiler_c,
+                state.solar_c, !state.sensor_fault);
 }
 
-void DisplayManager::drawTelemetryPage(bool chart)
+void DisplayManager::drawTelemetryPage()
 {
+  const uint32_t now_ms = millis();
   const auto &state = telemetry_state_;
-  const auto comm = http_telemetry::communication(
-      state.ever_message, millis() - state.communication_ms);
-  const auto measurement = http_telemetry::measurement(
-      state.ever_measurement, millis() - state.measurement_ms);
-  const bool stale = measurement == http_telemetry::Measurement::stale ||
-                     measurement == http_telemetry::Measurement::unknown;
-  char label[64];
-  auto line = [&](unsigned index, const char *value, int x, int y, int width,
-                  int height, uint16_t color, uint8_t font)
+  const uint32_t communication_age = state.ever_message ?
+      now_ms - state.communication_ms : UINT32_MAX;
+  original_telemetry_api::Input telemetry;
+  telemetry.snapshot_ok = state.snapshot_ok;
+  telemetry.ever_message = state.ever_message;
+  telemetry.ever_measurement = state.ever_measurement;
+  telemetry.communication_age_ms = communication_age;
+  telemetry.receive_age_ms = state.ever_measurement ? now_ms - state.measurement_ms : UINT32_MAX;
+  telemetry.sample_age_at_receive_ms = state.sample_age_at_receive_ms;
+  telemetry.boiler_c = state.boiler_c;
+  telemetry.solar_c = state.solar_c;
+  telemetry.flags = state.flags;
+  telemetry.valve = state.valve;
+  telemetry.faults = state.faults;
+  const auto sample = original_telemetry_api::view(telemetry);
+  const bool boiler_valid = sample.boiler_valid;
+  const bool solar_valid = sample.solar_valid;
+  const bool relay_fresh = !boiler_state_.busy && boiler_state_.connected &&
+      boiler_state_.relay != TuyaControl::Relay::Unknown &&
+      !boiler_policy::stale(boiler_state_.last_confirmed_ms, now_ms);
+
+  auto field = [&](unsigned index, const char *value, int x, int y,
+                   int width, int height, uint16_t color,
+                   uint8_t font, uint8_t size)
   {
-    if (strcmp(telemetry_lines_[index], value) == 0)
-      return;
+    if (strcmp(telemetry_lines_[index], value) == 0 &&
+        telemetry_colors_[index] == color) return;
     tft_.fillRect(x, y, width, height, kNavy);
-    tft_.setTextFont(font == 4 ? 2 : font);
-    tft_.setTextSize(font == 4 ? 2 : 1);
+    tft_.setTextFont(font);
+    tft_.setTextSize(size);
+    if (tft_.textWidth(value, font) > width) tft_.setTextSize(1);
     tft_.setTextColor(color, kNavy);
     tft_.drawString(value, x, y);
     strlcpy(telemetry_lines_[index], value, sizeof(telemetry_lines_[index]));
+    telemetry_colors_[index] = color;
   };
+
+  char label[64];
+  field(0, network_status_, 16, 35, 220, 13,
+        strcmp(network_status_, "WIFI ONLINE") == 0 ? TFT_GREEN : kOrange, 1, 1);
   time_t now = time(nullptr);
   struct tm local = {};
   char clock[8] = "--:--";
   if (now >= 1700000000 && localtime_r(&now, &local))
     snprintf(clock, sizeof(clock), "%02d:%02d", local.tm_hour, local.tm_min);
-  snprintf(label, sizeof(label), "%s  HTTP %s  %s", network_status_,
-           http_telemetry::name(comm), clock);
-  line(0, label, 16, 35, 288, 16,
-       comm == http_telemetry::Communication::live ? TFT_GREEN : kOrange, 2);
+  field(1, clock, 251, 16, 55, 25, TFT_WHITE, 2, 1);
+
   if (!setup_panel_visible_ && !ota_panel_visible_)
   {
-    if (!stale && isfinite(state.boiler_c))
-      snprintf(label, sizeof(label), "%.1f C", state.boiler_c);
-    else
-      strlcpy(label, "--.- C", sizeof(label));
-    line(1, label, 16, 92, 135, 32, kOrange, 4);
-    if (!stale && isfinite(state.solar_c))
-      snprintf(label, sizeof(label), "%.1f C", state.solar_c);
-    else
-      strlcpy(label, "--.- C", sizeof(label));
-    line(2, label, 171, 92, 135, 32, TFT_CYAN, 4);
+    if (boiler_valid) snprintf(label, sizeof(label), "%.1f", state.boiler_c);
+    else strlcpy(label, "--.-", sizeof(label));
+    field(2, label, 16, 102, 135, 54, kOrange, 2, 2);
+    if (solar_valid) snprintf(label, sizeof(label), "%.1f", state.solar_c);
+    else strlcpy(label, "--.-", sizeof(label));
+    field(3, label, 171, 102, 135, 54, TFT_CYAN, 2, 2);
+    const bool offline = !sample.connected;
+    const bool stale = !sample.fresh;
+    const char *boiler_quality = offline ? "ESP32 OFFLINE" : stale ? "STALE" :
+        boiler_valid ? "LIVE DS18B20" : "SENSOR UNKNOWN";
+    const char *solar_quality = offline ? "ESP32 OFFLINE" : stale ? "STALE" :
+        solar_valid ? "LIVE DS18B20" : "SENSOR UNKNOWN";
+    field(4, boiler_quality, 16, 184, 135, 15,
+          boiler_valid ? TFT_GREEN : kOrange, 1, 1);
+    field(5, solar_quality, 171, 184, 135, 15,
+          solar_valid ? TFT_GREEN : kOrange, 1, 1);
   }
-  const char *relay = boiler_state_.relay == TuyaControl::Relay::On ? "ON" : boiler_state_.relay == TuyaControl::Relay::Off ? "OFF"
-                                                                                                                            : "UNKNOWN";
-  snprintf(label, sizeof(label), "%s / %s", relay,
-           boiler_state_.connected ? "ONLINE" : "OFFLINE");
-  line(3, label, 16, 180, 288, 18, boiler_state_.connected ? TFT_GREEN : kOrange, 2);
+
+  const char *relay = !relay_fresh ? "UNKNOWN" :
+      boiler_state_.relay == TuyaControl::Relay::On ? "ON" : "OFF";
+  field(6, relay, 16, 246, 135, 33,
+        !relay_fresh ? kOrange : boiler_state_.relay == TuyaControl::Relay::On ?
+        TFT_GREEN : TFT_WHITE, 2, 2);
   if (boiler_state_.lease_active)
-    snprintf(label, sizeof(label), "Auto off in %lu:%02lu",
+    snprintf(label, sizeof(label), "AUTO-OFF %lu:%02lu",
              static_cast<unsigned long>(boiler_state_.lease_remaining_s / 60),
              static_cast<unsigned long>(boiler_state_.lease_remaining_s % 60));
-  else
-    strlcpy(label, "Auto off: idle", sizeof(label));
-  line(4, label, 16, 198, 288, 10, TFT_WHITE, 1);
-  const char* valve_names[] = {"UNKNOWN", "INTERLOCK", "OPENING", "CLOSING",
-                               "OPEN ASSUMED", "CLOSED ASSUMED", "FAULT"};
-  line(5, stale || state.valve > 6 ? "UNKNOWN" : valve_names[state.valve], 16, 240, 135, 22,
-       stale ? kOrange : TFT_GREEN, 2);
-  line(6, state.sensor_fault ? "SENSOR FAULT" : stale ? "UNKNOWN" : "AUTO",
-       171, 240,
-       135, 22, TFT_WHITE, 2);
-  const uint32_t comm_age = state.ever_message ?
-      (millis() - state.communication_ms) / 1000 : 0;
-  const uint32_t measurement_age = state.ever_measurement ?
-      (millis() - state.measurement_ms) / 1000 : 0;
-  snprintf(label, sizeof(label), "C:%s %lus M:%s %lus%s",
-           http_telemetry::name(comm), static_cast<unsigned long>(comm_age),
-           http_telemetry::name(measurement),
-           static_cast<unsigned long>(measurement_age),
-           comm == http_telemetry::Communication::live && stale ? " BACKLOG" : "");
+  else strlcpy(label, "AUTO-OFF IDLE", sizeof(label));
+  field(7, label, 16, 285, 135, 14, TFT_WHITE, 1, 1);
 
-  line(7, label, 16, 283, 288, 18,
-       stale ? kOrange : TFT_GREEN, 2);
-  const IPAddress esp_ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP() : IPAddress();
-  snprintf(label, sizeof(label), "%u.%u.%u.%u", esp_ip[0], esp_ip[1], esp_ip[2], esp_ip[3]);
-  line(8, label, 14, 451, 100, 12, TFT_WHITE, 1);
-  line(9, state.peer_ip[0] ? state.peer_ip : "--", 116, 451, 106, 12, TFT_WHITE, 1);
-  snprintf(label, sizeof(label), "%s %luh%02lum", boiler_state_.connected ? "ON" : "OFF",
-           static_cast<unsigned long>(millis() / 3600000U),
-           static_cast<unsigned long>((millis() / 60000U) % 60U));
-  line(10, label, 225, 451, 81, 12, boiler_state_.connected ? TFT_GREEN : kOrange, 1);
-  first_chart_refresh_ = false;
-  if (!chart)
-    return;
-  tft_.fillRect(14, 335, 292, 88, kNavy);
-  tft_.setTextFont(1);
-  tft_.setTextSize(1);
-  tft_.setTextColor(TFT_WHITE, kNavy);
-  if (!history_ || chart_minute_ < 0)
-  {
-    tft_.drawString("Waiting for trusted time and samples", 20, 365);
-    return;
-  }
-  constexpr int x0 = 38, width = 262, top = 344, height = 60;
-  float low = 150, high = -50;
-  const int64_t first = (chart_minute_ * 60 - 86400 + 59) / 60;
-  for (int64_t minute = first; minute <= chart_minute_; ++minute)
-  {
-    auto b = history_->at(minute);
-    if (b.minute < 0)
-      continue;
-    low = min(low, min(b.boiler_min, b.solar_min));
-    high = max(high, max(b.boiler_max, b.solar_max));
-  }
-  if (high < low)
-  {
-    tft_.drawString("No fresh samples", 18, 325);
-    return;
-  }
-  low = floorf((low - 2) / 10) * 10;
-  high = ceilf((high + 2) / 10) * 10;
-  if (high - low < 10)
-    high = low + 10;
-  tft_.drawRect(x0, top, width, height, 0x8410);
-  char axis[20];
-  snprintf(axis, sizeof(axis), "%.0f C", high);
-  tft_.drawString(axis, 2, top);
-  snprintf(axis, sizeof(axis), "%.0f C", low);
-  tft_.drawString(axis, 2, top + height - 12);
-  auto y = [&](float value)
-  { return top + height - 2 - static_cast<int>((value - low) * (height - 4) / (high - low)); };
-  int previous_boiler = -1, previous_solar = -1, previous_x = -1;
-  int64_t previous_last_minute = -1;
-  auto plot_run = [&](int x, int64_t run_first, int64_t run_last,
-                      float bmin, float bmax, float smin, float smax)
-  {
-    const int px = x0 + x;
-    tft_.drawLine(px, y(bmin), px, y(bmax), TFT_ORANGE);
-    tft_.drawLine(px, y(smin), px, y(smax), TFT_CYAN);
-    const int boiler_y = y((bmin + bmax) / 2), solar_y = y((smin + smax) / 2);
-    if (previous_last_minute >= 0 && run_first == previous_last_minute + 1)
-    {
-      tft_.drawLine(previous_x, previous_boiler, px, boiler_y, TFT_ORANGE);
-      tft_.drawLine(previous_x, previous_solar, px, solar_y, TFT_CYAN);
-    }
-    previous_x = px;
-    previous_boiler = boiler_y;
-    previous_solar = solar_y;
-    previous_last_minute = run_last;
-  };
-  for (int x = 0; x < width; ++x)
-  {
-    const int64_t begin = first + static_cast<int64_t>(x) * 1440 / width;
-    const int64_t end = first + static_cast<int64_t>(x + 1) * 1440 / width;
-    float bmin = 151, bmax = -51, smin = 151, smax = -51;
-    int64_t run_first = -1, run_last = -1;
-    for (int64_t minute = begin; minute < end && minute <= chart_minute_; ++minute)
-    {
-      const auto b = history_->at(minute);
-      if (b.minute < 0)
-      {
-        if (run_first >= 0)
-          plot_run(x, run_first, run_last, bmin, bmax, smin, smax);
-        run_first = -1;
-        previous_last_minute = -1;
-        bmin = smin = 151;
-        bmax = smax = -51;
-        continue;
-      }
-      if (run_first < 0)
-        run_first = minute;
-      run_last = minute;
-      bmin = min(bmin, b.boiler_min);
-      bmax = max(bmax, b.boiler_max);
-      smin = min(smin, b.solar_min);
-      smax = max(smax, b.solar_max);
-    }
-    if (run_first >= 0)
-      plot_run(x, run_first, run_last, bmin, bmax, smin, smax);
-  }
-  time_t left_time = first * 60, right_time = chart_minute_ * 60;
-  localtime_r(&left_time, &local);
-  strftime(axis, sizeof(axis), "%H:%M", &local);
-  tft_.drawString(axis, x0, top + height + 4);
-  localtime_r(&right_time, &local);
-  strftime(axis, sizeof(axis), "%H:%M", &local);
-  tft_.drawString(axis, x0 + width - 35, top + height + 4);
-  tft_.drawString("-24h", x0 + 39, top + height + 4);
-  tft_.drawString("now", x0 + width - 65, top + height + 4);
-  tft_.setTextColor(TFT_ORANGE, kNavy);
-  tft_.drawString("Boiler", 132, 335);
-  tft_.setTextColor(TFT_CYAN, kNavy);
-  tft_.drawString("Solar", 184, 335);
+  constexpr const char *valve_names[] = {"UNKNOWN", "FAULT", "OPENING",
+      "CLOSING", "OPEN", "CLOSED", "FAULT"};
+  const char *valve = sample.fresh && state.valve < 7 ?
+      valve_names[state.valve] : "UNKNOWN";
+  const uint16_t valve_color = strcmp(valve, "FAULT") == 0 ? TFT_RED :
+      strcmp(valve, "OPEN") == 0 || strcmp(valve, "CLOSED") == 0 ? TFT_GREEN :
+      strcmp(valve, "UNKNOWN") == 0 ? kOrange : TFT_WHITE;
+  field(8, valve, 171, 246, 135, 33, valve_color, 2, 2);
+
+  const auto link = controller_link::state(state.ever_message,
+      static_cast<uint8_t>(state.transport),
+      static_cast<uint8_t>(state.sender_intent),
+      communication_age,
+      state.ever_now ? now_ms - state.now_communication_ms : UINT32_MAX,
+      state.ever_http ? now_ms - state.http_communication_ms : UINT32_MAX,
+      now_ms);
+  field(9, controller_link::name(link), 16, 338, 288, 32,
+        link == controller_link::State::EspNow ? TFT_GREEN :
+        link == controller_link::State::HttpFallback ? kOrange :
+        link == controller_link::State::Offline ? TFT_RED : TFT_WHITE, 2, 2);
+  if (sample.has_age)
+    snprintf(label, sizeof(label), "SAMPLE %lus / %s",
+             static_cast<unsigned long>(sample.age_ms / 1000),
+             sample.fresh ? "LIVE" : "STALE");
+  else strlcpy(label, "NO CONTROLLER MEASUREMENT", sizeof(label));
+  field(10, label, 16, 371, 288, 13,
+        sample.fresh ? TFT_GREEN : kOrange, 1, 1);
+
+  const IPAddress s3_ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP() : IPAddress();
+  if (WiFi.status() == WL_CONNECTED)
+    snprintf(label, sizeof(label), "%u.%u.%u.%u",
+             s3_ip[0], s3_ip[1], s3_ip[2], s3_ip[3]);
+  else strlcpy(label, "--", sizeof(label));
+  field(11, label, 16, 418, 135, 16, TFT_WHITE, 1, 1);
+  const char *last_rx = !state.ever_message ? "NONE" :
+      state.transport == LocalHttpTelemetry::LinkTransport::EspNow ? "ESP-NOW" :
+      state.transport == LocalHttpTelemetry::LinkTransport::Http ? "HTTP" : "NONE";
+  field(12, last_rx, 171, 418, 135, 17, TFT_WHITE, 2, 1);
+  snprintf(label, sizeof(label), "UP %luh%02lum",
+           static_cast<unsigned long>(now_ms / 3600000U),
+           static_cast<unsigned long>((now_ms / 60000U) % 60U));
+  field(13, label, 16, 450, 135, 14, TFT_WHITE, 1, 1);
+  field(14, relay_fresh ? "TUYA VERIFIED" : "TUYA UNVERIFIED",
+        171, 450, 135, 14, relay_fresh ? TFT_GREEN : kOrange, 1, 1);
 }
 
 #endif

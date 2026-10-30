@@ -29,9 +29,7 @@ class DisplayManager {
  private:
 #if TFT_HARDWARE_ENABLED
   void drawDashboardFrame();
-  void drawTelemetryPage(bool chart);
-  void streamAssetRegion(const uint16_t* pixels, int16_t x, int16_t y,
-                         int16_t width, int16_t height);
+  void drawTelemetryPage();
   void drawSetupPanel(bool visible);
   void restoreTopPanelRegion();
   void drawOtaPanel(NatureNetworkManager::OtaPhase phase, uint8_t percent,
@@ -58,11 +56,8 @@ class DisplayManager {
   TuyaControl::Snapshot boiler_state_{};
   LocalHttpTelemetry::Snapshot telemetry_state_{};
   TemperatureHistory* history_ = nullptr;
-  bool first_chart_refresh_ = true;
-  char telemetry_lines_[12][64] = {};
-  bool chart_dirty_ = true;
-  int64_t chart_minute_ = -1;
-  uint32_t last_chart_draw_ms_ = 0;
+  char telemetry_lines_[15][64] = {};
+  uint16_t telemetry_colors_[15] = {};
   int64_t last_history_expire_second_ = 0;
   uint32_t last_telemetry_sequence_ = 0;
   uint64_t last_telemetry_boot_ = 0;

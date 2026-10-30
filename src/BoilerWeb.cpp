@@ -5,6 +5,7 @@
 #include "LocalHttpTelemetry.h"
 #include "BoilerPolicy.h"
 #include "BoilerDashboardPage.h"
+#include "ControllerLinkStatus.h"
 #include <ArduinoJson.h>
 #include "secrets.h"
 #include <mbedtls/sha256.h>
@@ -57,9 +58,11 @@ void BoilerWeb::run() {
       server_->stop();
       server_.reset();
       running_ = false;
-      session_[0] = 0;
     }
     if (!running_ && allowed) {
+      // A short Wi-Fi outage must not force every client to sign in again.
+      // Keep sessions only if the service returns on the same bound address.
+      if (bound_ip_ != IPAddress() && ip != bound_ip_) sessions_.clear();
       bound_ip_ = ip;
       server_.reset(new WebServer(ip, 80));
       configure();
@@ -108,29 +111,25 @@ bool BoilerWeb::sameOrigin() {
   return boiler_web_policy::originMatches(host.c_str(), supplied_host.c_str(),
                                           origin.c_str());
 }
-bool BoilerWeb::authorized() {
-  if (!available() || server_->client().localIP() != bound_ip_) return false;
-  const uint32_t now = millis();
-  if (!boiler_web_policy::sessionAlive(session_[0] != 0, session_created_, session_seen_, now)) {
-    session_[0] = 0;
-    return false;
-  }
+boiler_web_sessions::Session* BoilerWeb::currentSession() {
+  if (!available() || server_->client().localIP() != bound_ip_) return nullptr;
   const String cookie = server_->header("Cookie");
-  const bool found = boiler_web_policy::cookieHasSession(cookie.c_str(), session_);
-  if (found) session_seen_ = now;
-  return found;
+  return sessions_.find(cookie.c_str(), millis());
 }
+bool BoilerWeb::authorized() { return currentSession() != nullptr; }
 bool BoilerWeb::csrfValid() {
   const String submitted = server_->header("X-CSRF-Token");
-  return boiler_web_policy::csrfAuthorized(sameOrigin(), authorized(),
-                                          boiler_web_policy::equalToken(csrf_, submitted.c_str(), 32));
+  const bool origin = sameOrigin();
+  auto* session = origin ? currentSession() : nullptr;
+  return boiler_web_policy::csrfAuthorized(origin, session != nullptr,
+      session && boiler_web_policy::equalToken(session->csrf, submitted.c_str(), 32));
 }
 void BoilerWeb::root() {
   if (!available() || server_->client().localIP() != bound_ip_) return reject(403, "unavailable");
   headers();
-  if (authorized()) {
+  if (auto* session = currentSession()) {
     String html = FPSTR(kDashboardHtml);
-    html.replace("{{CSRF}}", csrf_);
+    html.replace("{{CSRF}}", session->csrf);
     server_->send(200, "text/html; charset=utf-8", html);
   } else {
     String html = FPSTR(kLoginHtml);
@@ -166,17 +165,17 @@ void BoilerWeb::login() {
     return reject(401, "invalid credentials");
   }
   failed_attempts_ = 0;
-  randomHex(session_, 32);
-  randomHex(csrf_, 16);
-  session_created_ = session_seen_ = now;
+  auto* session = sessions_.allocate(now);
+  randomHex(session->token, 32);
+  randomHex(session->csrf, 16);
   headers();
-  server_->sendHeader("Set-Cookie", String("boiler_sid=") + session_ + "; Path=/; HttpOnly; SameSite=Strict");
+  server_->sendHeader("Set-Cookie", String("boiler_sid=") + session->token + "; Path=/; HttpOnly; SameSite=Strict");
   server_->sendHeader("Location", "/", true);
   server_->send(303, "text/plain", "Signed in");
 }
 void BoilerWeb::logout() {
   if (!csrfValid()) return reject(403, "forbidden");
-  session_[0] = 0;
+  sessions_.invalidate(currentSession());
   headers();
   server_->sendHeader("Set-Cookie", "boiler_sid=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
   server_->send(200, "application/json", "{\"message\":\"signed out\"}");
@@ -240,11 +239,46 @@ void BoilerWeb::status() {
   data.otaPhase = otaPhaseName(ota.phase);
   data.otaPercent = ota.percent;
   data.otaError = ota.error;
-  DynamicJsonDocument document(2304);
+  DynamicJsonDocument document(3072);
   if (!boiler_web_api::populateStatus(document, data))
     return reject(503, "status unavailable");
+  const auto link_state = telemetry_->snapshot();
+  const auto link = controller_link::state(link_state.ever_message,
+      static_cast<uint8_t>(link_state.transport),
+      static_cast<uint8_t>(link_state.sender_intent),
+      now - link_state.communication_ms,
+      link_state.ever_now ? now - link_state.now_communication_ms : UINT32_MAX,
+      link_state.ever_http ? now - link_state.http_communication_ms : UINT32_MAX,
+      now);
+  document["controllerLink"] = controller_link::name(link);
+  document["controllerLastReceived"] = link_state.transport ==
+      LocalHttpTelemetry::LinkTransport::EspNow ? "ESP-NOW" :
+      link_state.transport == LocalHttpTelemetry::LinkTransport::Http ? "HTTP" : "NONE";
+  document["controllerSenderIntent"] = link_state.sender_intent ==
+      LocalHttpTelemetry::LinkTransport::EspNow ? "ESP-NOW" :
+      link_state.sender_intent == LocalHttpTelemetry::LinkTransport::Http ? "HTTP" : "NONE";
+  original_telemetry_api::Input original_input;
+  original_input.snapshot_ok = link_state.snapshot_ok;
+  original_input.ever_message = link_state.ever_message;
+  original_input.ever_measurement = link_state.ever_measurement;
+  original_input.communication_age_ms = link_state.ever_message ?
+      static_cast<uint32_t>(now - link_state.communication_ms) : UINT32_MAX;
+  original_input.receive_age_ms = link_state.ever_measurement ?
+      static_cast<uint32_t>(now - link_state.measurement_ms) : UINT32_MAX;
+  original_input.sample_age_at_receive_ms = link_state.sample_age_at_receive_ms;
+  original_input.boiler_c = link_state.boiler_c;
+  original_input.solar_c = link_state.solar_c;
+  original_input.flags = link_state.flags;
+  original_input.valve = link_state.valve;
+  original_input.faults = link_state.faults;
+  const auto original_view = original_telemetry_api::view(original_input);
+  document["controllerMeasurementAgeMs"] = original_view.has_age ?
+      original_view.age_ms : 0;
+  document["controllerHasMeasurement"] = link_state.ever_measurement;
+  if (!boiler_web_api::populateOriginalTelemetry(document, original_input))
+    return reject(503, "status unavailable");
   String body;
-  body.reserve(1400);
+  body.reserve(1800);
   serializeJson(document, body);
   headers();
   server_->send(200, "application/json", body);

@@ -3,6 +3,7 @@
 #if TFT_HARDWARE_ENABLED
 #include <WebServer.h>
 #include <memory>
+#include "BoilerWebSessions.h"
 #include "NetworkManager.h"
 #include "TuyaControl.h"
 class LocalHttpTelemetry;
@@ -18,6 +19,7 @@ class BoilerWeb {
   bool available() const;
   bool sameOrigin();
   bool authorized();
+  boiler_web_sessions::Session* currentSession();
   bool csrfValid();
   void headers();
   void reject(int code, const char* message);
@@ -33,11 +35,8 @@ class BoilerWeb {
   std::unique_ptr<WebServer> server_;
   bool running_ = false;
   IPAddress bound_ip_;
-  char session_[65] = {};
-  char csrf_[33] = {};
+  boiler_web_sessions::Table sessions_;
   char login_csrf_[33] = {};
-  uint32_t session_created_ = 0;
-  uint32_t session_seen_ = 0;
   uint32_t failed_since_ = 0;
   uint8_t failed_attempts_ = 0;
 };

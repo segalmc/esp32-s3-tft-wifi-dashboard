@@ -1,6 +1,7 @@
 #include "BoilerPolicy.h"
 #include "BoilerDps.h"
 #include "BoilerWebPolicy.h"
+#include "BoilerWebSessions.h"
 #include "BoilerWebApi.h"
 #include <assert.h>
 #include <stdio.h>
@@ -200,6 +201,56 @@ int main() {
   assert(!csrfAuthorized(originMatches(host, host, "http://192.168.31.99"), validSession, true));
   assert(!csrfAuthorized(sameOrigin, false, true));             // Unauthenticated command.
   assert(!csrfAuthorized(sameOrigin, validSession, false));      // Missing/invalid CSRF.
+  boiler_web_sessions::Table sessions;
+  char cookies[boiler_web_sessions::kMaxSessions][77] = {};
+  for (size_t i = 0; i < boiler_web_sessions::kMaxSessions; ++i) {
+    auto* slot = sessions.allocate(100 + i);
+    memset(slot->token, static_cast<int>('a' + i), 64);
+    slot->token[64] = 0;
+    memset(slot->csrf, static_cast<int>('a' + i), 32);
+    slot->csrf[32] = 0;
+    snprintf(cookies[i], sizeof(cookies[i]), "boiler_sid=%s", slot->token);
+  }
+  assert(sessions.find(cookies[0], 200));
+  assert(sessions.find(cookies[1], 200)); // Browser login preserves tablet.
+  auto* browser = sessions.find(cookies[1], 201);
+  assert(browser && equalToken(browser->csrf, browser->csrf, 32));
+  sessions.invalidate(browser);
+  assert(!sessions.find(cookies[1], 202)); // Logout isolates the session.
+  assert(sessions.find(cookies[0], 202));
+  auto* replacement = sessions.allocate(203);
+  memset(replacement->token, 'e', 64);
+  replacement->token[64] = 0;
+  assert(sessions.find(cookies[0], 204));
+  sessions.clear();
+  assert(!sessions.find(cookies[0], 205));
+  auto* expiring = sessions.allocate(300);
+  memset(expiring->token, 'f', 64);
+  expiring->token[64] = 0;
+  assert(!sessions.find("boiler_sid=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                        300 + kIdleMs));
+  sessions.clear();
+  for (size_t i = 0; i < boiler_web_sessions::kMaxSessions; ++i) {
+    auto* slot = sessions.allocate(1000 + i);
+    memset(slot->token, static_cast<int>('a' + i), 64);
+    slot->token[64] = 0;
+  }
+  assert(sessions.find(cookies[0], 1100));
+  auto* evicted = sessions.allocate(1101);
+  memset(evicted->token, 'e', 64);
+  evicted->token[64] = 0;
+  assert(!sessions.find(cookies[1], 1102)); // Least recently seen is evicted.
+  assert(sessions.find(cookies[0], 1102));
+  sessions.clear();
+  auto* absolute = sessions.allocate(1000);
+  memset(absolute->token, 'g', 64);
+  absolute->token[64] = 0;
+  char absolute_cookie[77] = {};
+  snprintf(absolute_cookie, sizeof(absolute_cookie), "boiler_sid=%s", absolute->token);
+  for (uint32_t now = 1000 + kIdleMs / 2; now < 1000 + kAbsoluteMs;
+       now += kIdleMs / 2)
+    assert(sessions.find(absolute_cookie, now));
+  assert(!sessions.find(absolute_cookie, 1000 + kAbsoluteMs));
   assert(parseAction("refresh") == Action::Refresh);
   assert(parseAction("reconnect") == Action::Reconnect);
   assert(parseAction("on") == Action::On);
