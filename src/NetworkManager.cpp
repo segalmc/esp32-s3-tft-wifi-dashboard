@@ -39,6 +39,18 @@ void appendJsonString(String& output, const String& input) {
 }  // namespace
 
 void NatureNetworkManager::begin() {
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
+      Serial.printf("Wi-Fi event: disconnected reason=%u at_ms=%lu\n",
+                    static_cast<unsigned>(info.wifi_sta_disconnected.reason),
+                    static_cast<unsigned long>(millis()));
+    else if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED)
+      Serial.printf("Wi-Fi event: associated at_ms=%lu\n", static_cast<unsigned long>(millis()));
+    else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP)
+      Serial.printf("Wi-Fi event: got-ip at_ms=%lu\n", static_cast<unsigned long>(millis()));
+    else if (event == ARDUINO_EVENT_WIFI_STA_LOST_IP)
+      Serial.printf("Wi-Fi event: lost-ip at_ms=%lu\n", static_cast<unsigned long>(millis()));
+  });
   commands_ = xQueueCreate(2, sizeof(Command));
   if (!commands_ || xTaskCreate(taskEntry, "nature-wifi", 8192, this, 1, nullptr) != pdPASS) {
     Serial.println("Wi-Fi: task allocation failed");
@@ -205,6 +217,10 @@ void NatureNetworkManager::run() {
 void NatureNetworkManager::startConnection(uint32_t now) {
   stopOta();
   WiFi.mode(snapshot().ap_active ? WIFI_AP_STA : WIFI_STA);
+  // Local HTTP and UDP discovery should not inherit modem-sleep delivery
+  // latency while the USB-powered dashboard is acting as a LAN endpoint.
+  const bool sleep_disabled = WiFi.setSleep(false);
+  Serial.printf("Wi-Fi: STA modem sleep disabled=%u\n", sleep_disabled && WiFi.getSleep() == WIFI_PS_NONE);
   WiFi.begin(saved_.ssid, saved_.password);
   attempt_started_ms_ = now;
   setState(State::Connecting);
@@ -214,8 +230,8 @@ void NatureNetworkManager::startConnection(uint32_t now) {
 void NatureNetworkManager::startPortal() {
   if (snapshot().ap_active) return;
   stopOta();  // ArduinoOTA's UDP listener otherwise accepts AP clients too.
-  // Publish the AP transition before enabling the radio so the WSS route
-  // rejects upgrades through the setup interface throughout startup.
+  // Publish the AP transition before enabling the radio so local services
+  // reject setup-interface traffic throughout startup.
   portENTER_CRITICAL(&snapshot_lock_);
   snapshot_.ap_active = true;
   portEXIT_CRITICAL(&snapshot_lock_);
@@ -697,6 +713,7 @@ void NatureNetworkManager::checkClock(uint32_t now) {
   if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED && time(nullptr) > 1700000000) {
     portENTER_CRITICAL(&snapshot_lock_);
     snapshot_.clock_synced = true;
+    ++snapshot_.clock_sync_generation;
     portEXIT_CRITICAL(&snapshot_lock_);
     Serial.println("Wi-Fi: clock synchronized; Israel timezone active");
   } else if (!clock_warning_sent_ && due(now, clock_started_ms_ + 30000U)) {

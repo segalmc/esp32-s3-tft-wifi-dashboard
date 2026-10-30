@@ -1,4 +1,4 @@
-# ESP32-S3 N16R8 TFT diagnostics
+# ESP32-S3 N16R8 hot water dashboard
 
 Phase 1 ESP32 serial diagnostics passed on the user's hardware. The user reports
 that the earlier Phase 2 ST7796S dashboard worked on the physical display.
@@ -13,8 +13,9 @@ The direct Tuya boiler proof of concept, USB gates, local Web dashboard, and
 hardware approval stages are documented in [boiler POC](docs/boiler-poc.md).
 For authenticated wireless firmware updates, follow the
 [OTA installation and backup guide](docs/ota.md) before the first USB upload.
-A [320 × 480 background preview](assets/dashboard-preview.png) shows the photograph
-and card surfaces; text is drawn by the firmware.
+The permanent TFT dashboard uses the scenic photograph from the
+[320 × 480 asset](assets/dashboard-preview.png); its current panels and text are
+drawn by the firmware. The preview still depicts the older card layout.
 
 ## Project
 
@@ -57,5 +58,8 @@ builds do not establish hardware behavior.
 
 # Local secure WebSocket server
 
-The opt-in, read-only ESP32-S3 local WSS endpoint and isolated development
-procedure are documented in [docs/LOCAL_WSS.md](docs/LOCAL_WSS.md).
+The authenticated local HTTP telemetry receiver and discovery protocol are
+documented in [docs/HTTP_TELEMETRY.md](docs/HTTP_TELEMETRY.md).
+
+The permanent rolling 24-hour TFT telemetry dashboard is documented in
+[docs/TELEMETRY_DASHBOARD.md](docs/TELEMETRY_DASHBOARD.md).

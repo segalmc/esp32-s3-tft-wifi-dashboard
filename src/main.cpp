@@ -7,7 +7,7 @@
 #include "NetworkManager.h"
 #include "TuyaControl.h"
 #include "BoilerWeb.h"
-#include "LocalWssServer.h"
+#include "LocalHttpTelemetry.h"
 #endif
 
 #ifndef CONFIG_IDF_TARGET_ESP32S3
@@ -20,7 +20,7 @@ DisplayManager display_manager;
 NatureNetworkManager network_manager;
 TuyaControl tuya_control;
 BoilerWeb boiler_web;
-LocalWssServer local_wss;
+LocalHttpTelemetry local_http;
 uint32_t last_loop_ms = 0;
 uint32_t stats_started_ms = 0;
 uint32_t max_loop_gap_ms = 0;
@@ -36,8 +36,8 @@ void setup() {
   network_manager.begin();
   tuya_control.begin(&network_manager);
   network_manager.attachTuya(&tuya_control);
-  boiler_web.begin(&network_manager, &tuya_control);
-  local_wss.begin(&network_manager);
+  local_http.begin(&network_manager);
+  boiler_web.begin(&network_manager, &tuya_control, &local_http);
 #endif
 }
 
@@ -46,6 +46,7 @@ void loop() {
   system_monitor.update(now_ms);
 #if TFT_HARDWARE_ENABLED
   display_manager.updateBoiler(tuya_control.snapshot());
+  display_manager.updateTelemetry(local_http.snapshot());
 #endif
   display_manager.update(now_ms);
 #if TFT_HARDWARE_ENABLED
@@ -75,9 +76,11 @@ void loop() {
   last_loop_ms = now_ms;
   max_dashboard_us = max(max_dashboard_us, display_manager.lastRefreshUs());
   if (now_ms - stats_started_ms >= 30000U) {
-    Serial.printf("Performance: AP=%s loop_gap_max=%lu ms dashboard_max=%lu us heap=%lu B PSRAM=%lu B\n",
+    local_http.diagnostics();
+    Serial.printf("Performance: AP=%s loop_gap_max=%lu ms dashboard_max=%lu us heap=%lu B min_heap=%lu B PSRAM=%lu B\n",
                   wifi.ap_active ? "on" : "off", static_cast<unsigned long>(max_loop_gap_ms),
-                  static_cast<unsigned long>(max_dashboard_us), static_cast<unsigned long>(ESP.getFreeHeap()), static_cast<unsigned long>(ESP.getFreePsram()));
+                  static_cast<unsigned long>(max_dashboard_us), static_cast<unsigned long>(ESP.getFreeHeap()),
+                  static_cast<unsigned long>(ESP.getMinFreeHeap()), static_cast<unsigned long>(ESP.getFreePsram()));
     stats_started_ms = now_ms;
     max_loop_gap_ms = 0;
     max_dashboard_us = 0;

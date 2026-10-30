@@ -20,6 +20,8 @@ class TuyaControl {
     bool reads_enabled;
     bool control_enabled;
     bool lease_active;
+    uint32_t lease_remaining_s;
+    int64_t lease_deadline_epoch;
     bool monitor_armed;
     bool storage_ready;
     bool busy;

@@ -5,7 +5,8 @@
 .vscode/ipch/
 .env
 secrets.h
-LocalWssConfig.h
+LocalHttpTelemetryConfig.h
+# Retain any legacy generated credentials as an ignored local quarantine.
 .local-wss/
 .boiler-web-password
 __pycache__/

@@ -1,12 +1,15 @@
 #include "SystemMonitor.h"
 
 #include <Arduino.h>
+#include <esp_system.h>
 #include "config.h"
 
 void SystemMonitor::begin() {
   started_ms_ = millis();
   last_report_ms_ = started_ms_;
   Serial.println("ESP32-S3 Phase 1 hardware check");
+  Serial.printf("Boot reset reason: %u\n",
+                static_cast<unsigned>(esp_reset_reason()));
   Serial.printf("Chip model: %s\n", ESP.getChipModel());
   Serial.printf("Flash size: %lu bytes\n", static_cast<unsigned long>(ESP.getFlashChipSize()));
   const bool psram_available = psramFound();
@@ -32,9 +35,9 @@ void SystemMonitor::update(uint32_t now_ms) {
                   ESP.getChipModel(), static_cast<unsigned long>(ESP.getFlashChipSize()), static_cast<unsigned long>(ESP.getPsramSize()),
                   static_cast<unsigned long>(ESP.getFreeHeap()));
   }
-  if (static_cast<uint32_t>(now_ms - last_report_ms_) < 1000U) return;
-  last_report_ms_ += 1000U;
-  ++seconds_;
+  if (static_cast<uint32_t>(now_ms - last_report_ms_) < 30000U) return;
+  last_report_ms_ = now_ms;
+  seconds_ = now_ms / 1000U;
   Serial.printf("Uptime: %lu s | Flash: %lu MB | PSRAM: %lu MB | PSRAM OK: %s | Free heap: %lu B | Free PSRAM: %lu B\n",
                 static_cast<unsigned long>(seconds_),
                 static_cast<unsigned long>(ESP.getFlashChipSize()) / 1024U / 1024U,

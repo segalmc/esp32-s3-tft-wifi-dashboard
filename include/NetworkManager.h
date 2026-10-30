@@ -9,6 +9,7 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <atomic>
 class TuyaControl;
 
 class NatureNetworkManager {
@@ -19,6 +20,7 @@ class NatureNetworkManager {
     bool ap_active;
     bool clock_synced;
     bool initial_setup;
+    uint32_t clock_sync_generation;
   };
   enum class OtaPhase : uint8_t { Idle, Uploading, Success, Error };
   struct OtaSnapshot {
@@ -72,7 +74,7 @@ class NatureNetworkManager {
   void rotateOtaPassword();
 
   mutable portMUX_TYPE snapshot_lock_ = portMUX_INITIALIZER_UNLOCKED;
-  Snapshot snapshot_{State::Error, false, false, false};
+  Snapshot snapshot_{State::Error, false, false, false, 0};
   OtaSnapshot ota_snapshot_{OtaPhase::Idle, 0, 0, 0};
   char ap_password_[17] = {};
   char ota_password_[21] = {};

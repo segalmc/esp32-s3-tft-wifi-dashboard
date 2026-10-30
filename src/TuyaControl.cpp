@@ -27,10 +27,14 @@ void TuyaControl::begin(NatureNetworkManager* network) {
 void TuyaControl::taskEntry(void* context) { static_cast<TuyaControl*>(context)->run(); }
 
 TuyaControl::Snapshot TuyaControl::snapshot() const {
+  const int64_t now = time(nullptr);
   portENTER_CRITICAL(&lock_);
   Snapshot copy = state_;
   copy.busy = boiler_policy::busy(pending_, static_cast<uint8_t>(state_.progress));
   portEXIT_CRITICAL(&lock_);
+  const int64_t remaining = copy.lease_deadline_epoch - now;
+  copy.lease_remaining_s = copy.lease_active && remaining > 0 ?
+      static_cast<uint32_t>(remaining) : 0;
   return copy;
 }
 
@@ -115,6 +119,7 @@ bool TuyaControl::persistLease(int64_t now) {
   lease_started_ms_ = millis();
   portENTER_CRITICAL(&lock_);
   state_.lease_active = true;
+  state_.lease_deadline_epoch = lease.deadline;
   portEXIT_CRITICAL(&lock_);
   return true;
 }
@@ -126,6 +131,7 @@ void TuyaControl::clearLease() {
   lease_started_ms_ = 0;
   portENTER_CRITICAL(&lock_);
   state_.lease_active = false;
+  state_.lease_deadline_epoch = 0;
   portEXIT_CRITICAL(&lock_);
 }
 
@@ -355,6 +361,7 @@ void TuyaControl::run() {
       lease_ = lease;
       portENTER_CRITICAL(&lock_);
       state_.lease_active = true;
+      state_.lease_deadline_epoch = lease.deadline;
       portEXIT_CRITICAL(&lock_);
     } else {
       Serial.println("Tuya: invalid persisted deadline; control disabled pending service");

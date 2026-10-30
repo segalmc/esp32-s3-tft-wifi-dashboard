@@ -1,6 +1,7 @@
 #pragma once
 #include <ArduinoJson.h>
 #include "BoilerWebPolicy.h"
+#include "OriginalTelemetryApi.h"
 
 namespace boiler_web_api {
 struct StatusData {
@@ -90,6 +91,34 @@ bool populateStatus(Document& document, const StatusData& data) {
   device["otaPhase"] = data.otaPhase;
   device["otaPercent"] = data.otaPercent;
   device["otaError"] = data.otaError;
+  return !document.overflowed();
+}
+template <typename Document>
+bool populateOriginalTelemetry(Document& document,
+                               const original_telemetry_api::Input& input) {
+  const auto telemetry = original_telemetry_api::view(input);
+  JsonObject original = document.createNestedObject("original");
+  original["source"] = "LED_BENCH";
+  original["connected"] = telemetry.connected;
+  original["fresh"] = telemetry.fresh;
+  if (telemetry.has_age) original["ageMs"] = telemetry.age_ms;
+  else original["ageMs"] = nullptr;
+  if (telemetry.boiler_valid) original["boilerTemperatureC"] = telemetry.boiler_c;
+  else original["boilerTemperatureC"] = nullptr;
+  if (telemetry.solar_valid) original["solarTemperatureC"] = telemetry.solar_c;
+  else original["solarTemperatureC"] = nullptr;
+  original["valveState"] = telemetry.valve_state;
+  original["valveEvidence"] = telemetry.valve_evidence;
+  original["valvePositionMeasured"] = false;
+  original["mode"] = "UNKNOWN";
+  original["targetTemperatureC"] = nullptr;
+  if (telemetry.faults_known) {
+    JsonObject faults = original.createNestedObject("faults");
+    faults["role"] = telemetry.role_fault;
+    faults["controller"] = telemetry.controller_fault;
+    faults["sensorInvalid"] = telemetry.sensor_invalid;
+    faults["interlock"] = telemetry.interlock;
+  } else original["faults"] = nullptr;
   return !document.overflowed();
 }
 template <typename Document>
