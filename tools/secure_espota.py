@@ -52,7 +52,7 @@ def upload(espota_path, host, firmware_path, password):
     local_port = random.SystemRandom().randint(10000, 60000)
     # This calls the same transport used by PlatformIO's normal espota command.
     # The secret exists only in this process and the authenticated exchange.
-    return espota.serve(
+    result = espota.serve(
         remote_addr=host,
         local_addr="0.0.0.0",
         remote_port=3232,
@@ -62,6 +62,10 @@ def upload(espota_path, host, firmware_path, password):
         filename=firmware_path,
         command=espota.FLASH,
     )
+    if type(result) is not int or result not in (0, 1):
+        logging.error("ESPOTA returned an invalid result")
+        return 1
+    return result
 
 
 def main(argv):

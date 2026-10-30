@@ -77,11 +77,12 @@ class SecureOtaTest(unittest.TestCase):
             fake_espota = Path(root) / "espota.py"
             fake_espota.write_text(
                 "FLASH = 0\n"
-                "def serve(host, local_ip, port, local_port, password, image, command):\n"
+                "def serve(remote_addr, local_addr, remote_port, local_port, password, md5_target, filename, command=FLASH):\n"
                 f"    assert password == {DUMMY_PASSWORD!r}\n"
-                "    assert host == '192.168.31.230' and local_ip == '0.0.0.0'\n"
-                "    assert port == 3232 and 10000 <= local_port <= 60000\n"
-                "    assert image == 'firmware.bin' and command == FLASH\n"
+                "    assert remote_addr == '192.168.31.230' and local_addr == '0.0.0.0'\n"
+                "    assert remote_port == 3232 and 10000 <= local_port <= 60000\n"
+                "    assert md5_target is None\n"
+                "    assert filename == 'firmware.bin' and command == FLASH\n"
                 "    return 0\n"
             )
             output = io.StringIO()
@@ -89,6 +90,42 @@ class SecureOtaTest(unittest.TestCase):
                 self.assertEqual(upload(fake_espota, "192.168.31.230",
                                         "firmware.bin", DUMMY_PASSWORD), 0)
             self.assertNotIn(DUMMY_PASSWORD, output.getvalue())
+
+
+    def test_upload_result_handling(self):
+        with tempfile.TemporaryDirectory() as root:
+            cases = [
+                (0, 0),
+                (1, 1),
+                (None, 1),
+                (True, 1),
+                ("OK", 1),
+                (2, 1),
+            ]
+
+            for index, (result, expected) in enumerate(cases):
+                with self.subTest(result=result):
+                    fake_espota = Path(root) / f"espota_{index}.py"
+                    fake_source = (
+                        "FLASH = 0" + chr(10)
+                        + f"def serve(**kwargs): return {result!r}"
+                        + chr(10)
+                    )
+                    fake_espota.write_text(fake_source)
+
+                    if expected == 1 and result != 1:
+                        with self.assertLogs(level="ERROR"):
+                            actual = upload(
+                                fake_espota, "192.168.31.230",
+                                "firmware.bin", DUMMY_PASSWORD
+                            )
+                    else:
+                        actual = upload(
+                            fake_espota, "192.168.31.230",
+                            "firmware.bin", DUMMY_PASSWORD
+                        )
+
+                    self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":

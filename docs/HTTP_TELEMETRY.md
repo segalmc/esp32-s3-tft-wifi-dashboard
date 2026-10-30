@@ -61,7 +61,7 @@ The explicit host runners pass record, HMAC, discovery validation, replay, malfo
 
 ## Phase 3 authenticated dashboard API (2026-10-30; built, not flashed)
 
-`GET /api/status` retains its existing authenticated session gate and all existing top-level fields. It now includes `original`, populated from the same `LocalHttpTelemetry::Snapshot` used for link diagnostics. No new route or actuator action is added. A read-only authenticated physical probe on 2026-10-30 verified that the currently installed S3 serves `original` with `source=LED_BENCH`. That installed image still showed stale data; the reliability, multi-session, TFT freshness and retention changes in this worktree have not been deployed.
+`GET /api/status` retains its existing authenticated session gate and all existing top-level fields. It includes `original`, populated from the same `LocalHttpTelemetry::Snapshot` used for TFT and link diagnostics. No new route or actuator action is added. The reliability image was deployed on 2026-10-30; a read-only physical probe observed twelve fresh LED-bench records. The valve target recovery extension is host-tested and built but not deployed.
 
 | `original` field | Source and meaning |
 | --- | --- |
@@ -71,17 +71,19 @@ The explicit host runners pass record, HMAC, discovery validation, replay, malfo
 | `ageMs` | Elapsed time since receipt plus record age at receipt; `null` before any measurement |
 | `boilerTemperatureC`, `solarTemperatureC` | Numeric °C when fresh, valid flag set, finite, and within −50…150°C; otherwise `null` |
 | `valveState` | `OPEN`, `CLOSED`, `OPENING`, `CLOSING`, `FAULT`, or `UNKNOWN` mapped from record valve code; UNKNOWN when stale |
+| `valvePhase` | `MOVING`, `INTERLOCK`, `IDLE`, or `UNKNOWN`; the 50 ms direction gap is not a valve fault |
 | `valveEvidence`, `valvePositionMeasured` | `INFERRED_LED_BENCH` and `false` for an inferred bench state; otherwise `UNKNOWN` and `false` |
+| `storageState`, `recoveryActive` | v2 target journal state (`READY`, `MISSING_TARGET`, `CORRUPT_TARGET`, `UNAVAILABLE`, `WRITE_FAILED`) and boot replay flag; `UNKNOWN`/false on v1 or stale data |
 | `mode`, `targetTemperatureC` | `UNKNOWN` and `null`; neither exists in record v1 |
 | `faults` | Fresh record bits `role`/`controller`, plus derived `sensorInvalid`/`interlock`; `null` when stale |
 
-An authenticated heartbeat refreshes communication only; it cannot refresh a measurement. Historical backlog cannot make a stale sample fresh. A zero temperature is valid when its validity bit is set. The record protocol remains version 1, 42 bytes, and has no mode, target or user-timer fields. The LED bench sender now queues a full record at a 3-second maximum interval for stable valid readings, with record uptime from the oldest valid DS18B20 observation. Each durably appended record advances its sequence. Both firmware images must be deployed for this behavior.
+An authenticated heartbeat refreshes communication only; it cannot refresh a measurement. Historical backlog cannot make a stale sample fresh. A zero temperature is valid when its validity bit is set. Record v2 keeps the 42-byte layout and transport wire version unchanged; the receiver also accepts v1. New fault bits distinguish missing/corrupt/unavailable target, failed target write and active recovery from a genuine output-control fault. Interlock remains reported in `faults.interlock` for compatibility but maps to `valveState=UNKNOWN`, not FAULT. The LED bench sender queues a full record at a 3-second maximum interval for stable valid readings, with record uptime from the oldest valid DS18B20 observation. Each durably appended record advances its sequence.
 
 The old motor-valve firmware in the separate `hot_water_ctrl_arduino` checkout reads ADC thermistors and publishes MQTT state/mode. It has no ESP-NOW sender. The current `led_bench` sender reads DS18B20 probes and simulates valve movement with LEDs. Its `OPEN`/`CLOSED` result does **not** establish physical valve position. Production physical valve/mode telemetry requires a separately reviewed, versioned original-controller sender update; neither actuator behavior nor its safety logic should be changed for that addition.
 
-## Phase 4A preparation status
+## Phase 4A deployment and valve-recovery preparation
 
-The uncommitted Phase 3 server worktree was preserved at `/home/michael/Projects/esp32-s3-http-telemetry-server` on branch `feat/http-telemetry-server`; the prior `/tmp/hwp-http-server` copy remains as a fallback. A hidden-input, read-only physical login probe succeeded on 2026-10-30 and confirmed that the accepted password matches the ignored hash header used by this worktree. The physical S3 now serves `original`, but six status polls showed a connected ESP-NOW link with stale LED-bench measurement ages of about 586–596 seconds and null temperatures. The current OTA upload credential file is absent, so the uploader fails closed. The new reliability image has not been deployed; exact target/partition/identity and recovery checks are prerequisites for deployment.
+The server worktree is at `/home/michael/Projects/esp32-s3-http-telemetry-server` on branch `feat/http-telemetry-server`. The reliability firmware was app-only flashed into the verified active slot and read back on 2026-10-30. Twelve read-only polls then showed fresh real DS18B20 temperatures, a 7-second age gate and inferred LED-bench valve state, also rendered on the Android tablet. The v2 target/storage decoder and TFT status line are built and host-tested only; they have not been flashed or physically validated.
 
 The dashboard now holds four bounded independent sessions. Each login receives a fresh random cookie and CSRF token; idle expiry remains 15 minutes, absolute expiry 8 hours, and a logout invalidates only its matching session. The least recently seen session is evicted when all four slots are occupied. This permits a browser and tablet to poll together without replacing each other's token. The tablet retains its session only in process memory; after expiry or process restart the user must sign in again. HTTP still provides no confidentiality on the LAN.
 

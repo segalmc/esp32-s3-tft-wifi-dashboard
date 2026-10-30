@@ -109,6 +109,9 @@ bool populateOriginalTelemetry(Document& document,
   else original["solarTemperatureC"] = nullptr;
   original["valveState"] = telemetry.valve_state;
   original["valveEvidence"] = telemetry.valve_evidence;
+  original["valvePhase"] = telemetry.valve_phase;
+  original["storageState"] = telemetry.storage_state;
+  original["recoveryActive"] = telemetry.recovery_active;
   original["valvePositionMeasured"] = false;
   original["mode"] = "UNKNOWN";
   original["targetTemperatureC"] = nullptr;

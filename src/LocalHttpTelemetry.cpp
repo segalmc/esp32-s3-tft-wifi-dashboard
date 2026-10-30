@@ -148,7 +148,7 @@ void LocalHttpTelemetry::receive(WebServer& web) {
     }
     updateCommunication(header, result.has_current ? &result.current : nullptr, now_ms,
                         web.client().remoteIP(), LinkTransport::Http,
-                        LinkTransport::Http);
+                        LinkTransport::Http, accepted > 0);
     char response[sizeof(Ack) * 2 + 1];
     hex_encode(reinterpret_cast<const uint8_t*>(&ack), sizeof(ack), response);
     web.sendHeader("Cache-Control", "no-store");
@@ -158,12 +158,13 @@ void LocalHttpTelemetry::updateCommunication(const BatchHeader& header,
                                               const Record* latest,
                                               uint32_t now_ms, IPAddress peer,
                                               LinkTransport transport,
-                                              LinkTransport intent) {
+                                              LinkTransport intent, bool accepted_records) {
     if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(20)) != pdTRUE) return;
     const bool valid_heartbeat = header.kind == kBatchKindHeartbeat &&
         state_.ever_measurement && header.reference_boot_nonce == state_.boot_nonce &&
         header.reference_sequence == state_.sequence && header.health == state_.flags;
-    if (latest || valid_heartbeat) {
+    // Accepted historical records confirm link activity, not fresh measurements.
+    if (latest || valid_heartbeat || accepted_records) {
         state_.ever_message = true;
         state_.communication_ms = now_ms;
         state_.transport = transport;
@@ -187,6 +188,7 @@ void LocalHttpTelemetry::updateCommunication(const BatchHeader& header,
         state_.epoch_s = latest->flags & kClockValid ? latest->epoch_s : 0;
         state_.flags = latest->flags;
         state_.faults = latest->faults;
+        state_.record_version = latest->version;
         state_.sensor_fault = latest->faults ||
                               (latest->flags & (kBoilerValid | kSolarValid)) !=
                                   (kBoilerValid | kSolarValid);
@@ -306,7 +308,7 @@ void LocalHttpTelemetry::nowLoop() {
         updateCommunication(header, result.has_current ? &result.current : nullptr,
                             millis(), IPAddress(), LinkTransport::EspNow,
                             prefix.reserved == kIntentEspNow ? LinkTransport::EspNow :
-                            LinkTransport::Http);
+                            LinkTransport::Http, result.count > 0);
         if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(5)) == pdTRUE) {
             state_.accepted += result.new_records;
             state_.duplicates += result.duplicates;

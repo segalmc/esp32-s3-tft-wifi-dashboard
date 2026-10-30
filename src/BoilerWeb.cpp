@@ -271,6 +271,7 @@ void BoilerWeb::status() {
   original_input.flags = link_state.flags;
   original_input.valve = link_state.valve;
   original_input.faults = link_state.faults;
+  original_input.record_version = link_state.record_version;
   const auto original_view = original_telemetry_api::view(original_input);
   document["controllerMeasurementAgeMs"] = original_view.has_age ?
       original_view.age_ms : 0;

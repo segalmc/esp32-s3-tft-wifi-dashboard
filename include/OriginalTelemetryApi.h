@@ -18,6 +18,7 @@ struct Input {
   uint8_t flags = 0;
   uint8_t valve = 0;
   uint8_t faults = 0;
+  uint8_t record_version = 1;
 };
 struct View {
   bool connected = false;
@@ -30,6 +31,9 @@ struct View {
   float solar_c = 0;
   const char* valve_state = "UNKNOWN";
   const char* valve_evidence = "UNKNOWN";
+  const char* valve_phase = "UNKNOWN";
+  const char* storage_state = "UNKNOWN";
+  bool recovery_active = false;
   bool faults_known = false;
   bool role_fault = false;
   bool controller_fault = false;
@@ -66,12 +70,24 @@ inline View view(const Input& input) {
   result.controller_fault = (input.faults & http_telemetry::kControllerFault) != 0;
   result.sensor_invalid = !result.boiler_valid || !result.solar_valid;
   result.interlock = input.valve == static_cast<uint8_t>(http_telemetry::Valve::interlock);
+  if (input.record_version == http_telemetry::kTargetRecordVersion &&
+      (input.faults & http_telemetry::kStorageKnown)) {
+    result.storage_state = input.faults & http_telemetry::kTargetMissing ? "MISSING_TARGET" :
+        input.faults & http_telemetry::kTargetCorrupt ? "CORRUPT_TARGET" :
+        input.faults & http_telemetry::kStorageUnavailable ? "UNAVAILABLE" :
+        input.faults & http_telemetry::kTargetWriteFailed ? "WRITE_FAILED" : "READY";
+    result.recovery_active = (input.faults & http_telemetry::kRecoveryActive) != 0;
+  }
   switch (static_cast<http_telemetry::Valve>(input.valve)) {
-    case http_telemetry::Valve::interlock: result.valve_state = "FAULT"; break;
-    case http_telemetry::Valve::opening: result.valve_state = "OPENING"; break;
-    case http_telemetry::Valve::closing: result.valve_state = "CLOSING"; break;
-    case http_telemetry::Valve::open_assumed: result.valve_state = "OPEN"; break;
-    case http_telemetry::Valve::closed_assumed: result.valve_state = "CLOSED"; break;
+    case http_telemetry::Valve::interlock: result.valve_phase = "INTERLOCK"; break;
+    case http_telemetry::Valve::opening:
+        result.valve_state = "OPENING"; result.valve_phase = "MOVING"; break;
+    case http_telemetry::Valve::closing:
+        result.valve_state = "CLOSING"; result.valve_phase = "MOVING"; break;
+    case http_telemetry::Valve::open_assumed:
+        result.valve_state = "OPEN"; result.valve_phase = "IDLE"; break;
+    case http_telemetry::Valve::closed_assumed:
+        result.valve_state = "CLOSED"; result.valve_phase = "IDLE"; break;
     case http_telemetry::Valve::fault: result.valve_state = "FAULT"; break;
     default: break;
   }

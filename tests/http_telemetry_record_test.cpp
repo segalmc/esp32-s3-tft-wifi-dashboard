@@ -34,6 +34,13 @@ int main() {
     broken.faults = 4;
     seal(broken);
     assert(!valid(broken, 9));
+    broken.version = kTargetRecordVersion;
+    broken.faults = kStorageKnown | kTargetMissing;
+    seal(broken);
+    assert(valid(broken, 9));
+    broken.version = 3;
+    seal(broken);
+    assert(!valid(broken, 9));
     Record sent[] = {a, a};
     sent[1].sequence = 2;
     seal(sent[1]);

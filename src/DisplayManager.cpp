@@ -362,6 +362,7 @@ void DisplayManager::drawTelemetryPage()
   telemetry.flags = state.flags;
   telemetry.valve = state.valve;
   telemetry.faults = state.faults;
+  telemetry.record_version = state.record_version;
   const auto sample = original_telemetry_api::view(telemetry);
   const bool boiler_valid = sample.boiler_valid;
   const bool solar_valid = sample.solar_valid;
@@ -427,7 +428,7 @@ void DisplayManager::drawTelemetryPage()
   else strlcpy(label, "AUTO-OFF IDLE", sizeof(label));
   field(7, label, 16, 285, 135, 14, TFT_WHITE, 1, 1);
 
-  constexpr const char *valve_names[] = {"UNKNOWN", "FAULT", "OPENING",
+  constexpr const char *valve_names[] = {"UNKNOWN", "WAIT", "OPENING",
       "CLOSING", "OPEN", "CLOSED", "FAULT"};
   const char *valve = sample.fresh && state.valve < 7 ?
       valve_names[state.valve] : "UNKNOWN";
@@ -435,6 +436,16 @@ void DisplayManager::drawTelemetryPage()
       strcmp(valve, "OPEN") == 0 || strcmp(valve, "CLOSED") == 0 ? TFT_GREEN :
       strcmp(valve, "UNKNOWN") == 0 ? kOrange : TFT_WHITE;
   field(8, valve, 171, 246, 135, 33, valve_color, 2, 2);
+  const char* target_status = !sample.fresh ? "TARGET UNVERIFIED" :
+      sample.recovery_active ? "RECOVERING TARGET" :
+      strcmp(sample.storage_state, "READY") == 0 ? "TARGET SAVED" :
+      strcmp(sample.storage_state, "MISSING_TARGET") == 0 ? "TARGET MISSING" :
+      strcmp(sample.storage_state, "CORRUPT_TARGET") == 0 ? "TARGET CORRUPT" :
+      strcmp(sample.storage_state, "UNAVAILABLE") == 0 ? "STORAGE OFFLINE" :
+      strcmp(sample.storage_state, "WRITE_FAILED") == 0 ? "SAVE FAILED" :
+      "TARGET UNKNOWN";
+  field(15, target_status, 171, 295, 135, 10,
+        strcmp(sample.storage_state, "READY") == 0 ? TFT_GREEN : kOrange, 1, 1);
 
   const auto link = controller_link::state(state.ever_message,
       static_cast<uint8_t>(state.transport),

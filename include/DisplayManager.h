@@ -56,8 +56,8 @@ class DisplayManager {
   TuyaControl::Snapshot boiler_state_{};
   LocalHttpTelemetry::Snapshot telemetry_state_{};
   TemperatureHistory* history_ = nullptr;
-  char telemetry_lines_[15][64] = {};
-  uint16_t telemetry_colors_[15] = {};
+  char telemetry_lines_[16][64] = {};
+  uint16_t telemetry_colors_[16] = {};
   int64_t last_history_expire_second_ = 0;
   uint32_t last_telemetry_sequence_ = 0;
   uint64_t last_telemetry_boot_ = 0;

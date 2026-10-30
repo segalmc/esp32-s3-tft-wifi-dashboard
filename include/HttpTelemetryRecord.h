@@ -8,11 +8,20 @@
 // targets. A persisted record is immutable; CRC covers every preceding byte.
 namespace http_telemetry {
 constexpr uint8_t kVersion = 1;
+constexpr uint8_t kTargetRecordVersion = 2; // Same 42-byte layout; extended fault bits.
 constexpr uint8_t kBoilerValid = 1;
 constexpr uint8_t kSolarValid = 2;
 constexpr uint8_t kClockValid = 4;
 constexpr uint8_t kRoleFault = 1;
 constexpr uint8_t kControllerFault = 2;
+constexpr uint8_t kTargetMissing = 4;
+constexpr uint8_t kTargetCorrupt = 8;
+constexpr uint8_t kStorageUnavailable = 16;
+constexpr uint8_t kTargetWriteFailed = 32;
+constexpr uint8_t kRecoveryActive = 64;
+constexpr uint8_t kStorageKnown = 128;
+constexpr uint8_t kExtendedFaults = kTargetMissing | kTargetCorrupt |
+    kStorageUnavailable | kTargetWriteFailed | kRecoveryActive | kStorageKnown;
 enum class Valve : uint8_t {
     unknown = 0, interlock = 1, opening = 2, closing = 3,
     open_assumed = 4, closed_assumed = 5, fault = 6
@@ -55,13 +64,15 @@ inline void seal(Record& record) {
     record.crc = checksum(&record, offsetof(Record, crc));
 }
 inline bool valid(const Record& record, uint64_t expected_device) {
-    if (record.version != kVersion || record.device_id != expected_device ||
+    if ((record.version != kVersion && record.version != kTargetRecordVersion) ||
+        record.device_id != expected_device ||
         !record.device_id || !record.boot_nonce || !record.sequence ||
         (record.flags & ~uint8_t{kBoilerValid | kSolarValid | kClockValid}) ||
         ((record.flags & kClockValid) ? record.epoch_s < 1700000000U
                                       : record.epoch_s != 0) ||
         record.valve > static_cast<uint8_t>(Valve::fault) ||
-        (record.faults & ~uint8_t{kRoleFault | kControllerFault}) ||
+        (record.faults & ~static_cast<uint8_t>(kRoleFault | kControllerFault |
+            (record.version == kTargetRecordVersion ? kExtendedFaults : 0))) ||
         (record.flags & kBoilerValid &&
          (record.boiler_centi < -5000 || record.boiler_centi > 15000)) ||
         (record.flags & kSolarValid &&

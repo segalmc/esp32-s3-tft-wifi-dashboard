@@ -29,6 +29,7 @@ public:
         uint8_t valve = 0;
         uint8_t flags = 0;
         uint8_t faults = 0;
+        uint8_t record_version = 0;
         uint32_t communication_ms = 0;
         uint32_t measurement_ms = 0;
         uint32_t sample_age_at_receive_ms = 0;
@@ -74,7 +75,7 @@ private:
     void updateCommunication(const http_telemetry::BatchHeader& header,
                              const http_telemetry::Record* latest,
                              uint32_t now_ms, IPAddress peer,
-                             LinkTransport transport, LinkTransport intent);
+                             LinkTransport transport, LinkTransport intent, bool accepted_records);
     static uint64_t randomNonce();
     NatureNetworkManager* network_ = nullptr;
     http_telemetry::LittleFsJournalStore store_;

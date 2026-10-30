@@ -40,6 +40,7 @@ int main() {
   assert(strcmp(valid["original"]["valveEvidence"], "INFERRED_LED_BENCH") == 0);
   assert(valid["original"]["valvePositionMeasured"] == false);
   assert(strcmp(valid["original"]["mode"], "UNKNOWN") == 0);
+  assert(strcmp(valid["original"]["storageState"], "UNKNOWN") == 0);
   assert(valid["original"]["targetTemperatureC"].isNull());
   assert(valid["original"]["faults"]["role"] == false);
 
@@ -86,8 +87,22 @@ int main() {
 
   input.valve = static_cast<uint8_t>(http_telemetry::Valve::interlock);
   auto interlock = status(input);
-  assert(strcmp(interlock["original"]["valveState"], "FAULT") == 0);
+  assert(strcmp(interlock["original"]["valveState"], "UNKNOWN") == 0);
+  assert(strcmp(interlock["original"]["valvePhase"], "INTERLOCK") == 0);
   assert(interlock["original"]["faults"]["interlock"] == true);
+
+  input.record_version = http_telemetry::kTargetRecordVersion;
+  input.valve = static_cast<uint8_t>(http_telemetry::Valve::opening);
+  input.faults = http_telemetry::kStorageKnown | http_telemetry::kRecoveryActive;
+  auto recovery = status(input);
+  assert(strcmp(recovery["original"]["valveState"], "OPENING") == 0);
+  assert(strcmp(recovery["original"]["storageState"], "READY") == 0);
+  assert(recovery["original"]["recoveryActive"] == true);
+  input.valve = static_cast<uint8_t>(http_telemetry::Valve::unknown);
+  input.faults = http_telemetry::kStorageKnown | http_telemetry::kTargetCorrupt;
+  auto storage = status(input);
+  assert(strcmp(storage["original"]["valveState"], "UNKNOWN") == 0);
+  assert(strcmp(storage["original"]["storageState"], "CORRUPT_TARGET") == 0);
 
   assert(effective_age(UINT32_MAX, 2) == UINT32_MAX);
 }
