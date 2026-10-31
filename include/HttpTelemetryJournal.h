@@ -159,19 +159,30 @@ public:
         if (!ready_ || !targets || !found || !conflicts || count > kMaxBatch)
             return false;
         for (size_t i = 0; i < count; ++i) found[i] = conflicts[i] = false;
+
+        // Performance only: one filesystem read per 32 records, not per record.
+        // Preserve full duplicate/conflict checks, even for repeated IDs.
+        constexpr size_t kRecordsPerRead = 32;
+        Record chunk[kRecordsPerRead]{};
         for (uint32_t seg = meta_.head_segment; seg <= meta_.tail_segment; ++seg) {
             size_t bytes = 0;
             if (!store_.size(seg, bytes)) return false;
-            for (size_t index = 0; index < bytes / sizeof(Record); ++index) {
-                Record current{};
-                if (!store_.read(seg, index * sizeof(Record), &current,
-                                 sizeof(current))) return false;
-                for (size_t i = 0; i < count; ++i)
-                    if (same_id(current, targets[i])) {
-                        found[i] = true;
-                        if (memcmp(&current, &targets[i], sizeof(Record)) != 0)
-                            conflicts[i] = true;
-                    }
+            const size_t records_in_segment = bytes / sizeof(Record);
+            for (size_t index = 0; index < records_in_segment;) {
+                const size_t remaining = records_in_segment - index;
+                const size_t take = remaining < kRecordsPerRead ? remaining : kRecordsPerRead;
+                if (!store_.read(seg, index * sizeof(Record), chunk,
+                                 take * sizeof(Record))) return false;
+                for (size_t j = 0; j < take; ++j) {
+                    const Record& current = chunk[j];
+                    for (size_t i = 0; i < count; ++i)
+                        if (same_id(current, targets[i])) {
+                            found[i] = true;
+                            if (memcmp(&current, &targets[i], sizeof(Record)) != 0)
+                                conflicts[i] = true;
+                        }
+                }
+                index += take;
             }
             if (seg == UINT32_MAX) break;
         }
