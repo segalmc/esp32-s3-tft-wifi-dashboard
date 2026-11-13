@@ -40,7 +40,10 @@ with tempfile.TemporaryDirectory(prefix="hwp-s3-http-check-") as directory:
             command += [f"-I{headers}"]
         command += [str(source), "-o", str(binary)]
         if name == "original_telemetry_api_test.cpp":
-            command.insert(4, f"-I{HERE.parent / '.pio/libdeps/esp32-s3-n16r8-tft-ota/ArduinoJson/src'}")
+            arduino = next((HERE.parent / '.pio/libdeps').glob('*/ArduinoJson/src'), None)
+            if arduino is None:
+                raise SystemExit('build an S3 environment to provide ArduinoJson headers')
+            command.insert(4, f'-I{arduino}')
         if crypto:
             command += [f"-Wl,-l:{MBEDCRYPTO}"]
         subprocess.run(command, check=True)

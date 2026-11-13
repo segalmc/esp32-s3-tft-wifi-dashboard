@@ -11,7 +11,7 @@ import sys
 
 
 ALPHABET = frozenset("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-PASSWORD_PATH = Path.home() / ".config" / "nature-glass" / "ota-password"
+PASSWORD_PATH = Path(os.environ.get("NATURE_GLASS_OTA_PASSWORD_FILE", str(Path.home() / ".config" / "nature-glass" / "ota-password")))
 
 
 def load_password(path=PASSWORD_PATH):

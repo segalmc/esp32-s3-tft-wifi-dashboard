@@ -10,7 +10,7 @@ import re
 import secrets
 
 ROOT = Path(__file__).resolve().parents[1]
-PROXY = Path('/home/michael/hotWaterCtrl/localProxyTuya')
+PROXY = Path(os.environ.get('HOT_WATER_LEGACY_PROXY_ROOT', str(Path.home() / '.local/share/hot-water/archives/legacy-2026-11-14/hotWaterCtrl/localProxyTuya')))
 
 
 def require(pattern, source, name):
