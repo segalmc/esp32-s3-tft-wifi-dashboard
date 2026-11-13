@@ -21,6 +21,7 @@ TESTS = (
     "controller_link_status_test.cpp",
     "original_telemetry_api_test.cpp",
     "now_replay_guard_test.cpp",
+    "now_discovery_exchange_test.cpp",
 )
 with tempfile.TemporaryDirectory(prefix="hwp-s3-http-check-") as directory:
     for name in TESTS:
@@ -45,3 +46,6 @@ with tempfile.TemporaryDirectory(prefix="hwp-s3-http-check-") as directory:
         subprocess.run(command, check=True)
         subprocess.run([str(binary)], check=True)
         print(f"PASS {name}", flush=True)
+
+subprocess.run(["python3", str(HERE.parent / "tools/test_usb_serial_latency.py")], check=True)
+subprocess.run(["python3", str(HERE.parent / "tools/test_telemetry_snapshot_order.py")], check=True)

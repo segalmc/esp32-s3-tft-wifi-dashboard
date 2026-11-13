@@ -1,0 +1,36 @@
+[
+  {
+    "check": "timer15",
+    "pass": true,
+    "visible": "15 min \u00b7 selected"
+  },
+  {
+    "check": "timer30",
+    "pass": true,
+    "visible": "30 min \u00b7 selected"
+  },
+  {
+    "check": "target40",
+    "pass": true,
+    "visible": "40\u00b0C \u00b7 selected"
+  },
+  {
+    "check": "target50",
+    "pass": true,
+    "visible": "50\u00b0C \u00b7 selected"
+  },
+  {
+    "check": "target60",
+    "pass": true,
+    "visible": "60\u00b0C \u00b7 selected"
+  },
+  {
+    "check": "45 minute tap stays blocked",
+    "pass": true,
+    "visible": "S3 USB control authorization is required"
+  },
+  {
+    "check": "restore 15 minutes and 50 C",
+    "pass": true
+  }
+]

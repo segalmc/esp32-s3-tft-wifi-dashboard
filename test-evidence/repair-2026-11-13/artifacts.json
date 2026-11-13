@@ -1,0 +1,13 @@
+{
+  "firmware": {
+    "environment": "esp32-s3-n16r8-tft",
+    "bytes": 1772592,
+    "sha256": "c6a1cda9addb1044f85e03a8fe70293f18a880ba31e98763a68e0e9d1bc138d5",
+    "authenticatedOtaComplete": true
+  },
+  "android": {
+    "installedApkSha256": "b7b33c844ddb68f2594c93cbc8b4822d24c7b550d4147071dd0badba623ac602",
+    "installedMatchesBuiltApk": true,
+    "reinstalled": false
+  }
+}

@@ -117,15 +117,15 @@ int main() {
   assert(!armMonitor(nvs));
   nvs.fail_write = false;
   assert(armMonitor(nvs));
-  assert(monitorArmed(nvs));  // A later boot loads authorization.
-  const auto rebootGates = bootGates(nvs, true);
-  assert(rebootGates.reads && !rebootGates.control);
-  const auto storageFailureGates = bootGates(nvs, false);
+  assert(monitorArmed(nvs));  // Legacy maintenance marker remains readable.
+  const auto rebootGates = bootGates(true);
+  assert(rebootGates.reads && rebootGates.control);
+  const auto storageFailureGates = bootGates(false);
   assert(!storageFailureGates.reads && !storageFailureGates.control);
   assert(disarmMonitor(nvs));
   assert(!monitorArmed(nvs));
-  const auto disarmedBootGates = bootGates(nvs, true);
-  assert(!disarmedBootGates.reads && !disarmedBootGates.control);
+  const auto disarmedBootGates = bootGates(true);
+  assert(disarmedBootGates.reads && disarmedBootGates.control);
   bool pending = false;
   assert(reserve(pending, 0));
   assert(!reserve(pending, 0));  // A simultaneous Web/Serial request is rejected.
@@ -311,6 +311,15 @@ int main() {
   api.ip = "192.168.31.230";
   api.result = "state did not verify";
   api.reconcileIntervalMs = kReconcileMs;
+  api.heatingActive = true;
+  api.shutdownPending = true;
+  api.durationSeconds = 900;
+  api.targetC = 40;
+  api.remainingSeconds = 0;
+  api.deadlineEpoch = start + 900;
+  api.shutdownReason = "target";
+  api.temperatureFresh = true;
+  api.boilerC = 40.25;
   StaticJsonDocument<2304> apiDocument;
   assert(boiler_web_api::populateStatus(apiDocument, api));
   char apiResponse[2048] = {};
@@ -326,15 +335,25 @@ int main() {
   assert(parsedResponse["diagnostics"]["reconcileIntervalMs"] == kReconcileMs);
   assert(parsedResponse["device"]["clockSynced"] == false);
   assert(parsedResponse["device"]["otaPhase"] == "unavailable");
+  assert(parsedResponse["heating"]["active"] == true);
+  assert(parsedResponse["heating"]["shutdownPending"] == true);
+  assert(parsedResponse["heating"]["remainingSeconds"] == 0);
+  assert(parsedResponse["heating"]["targetC"] == 40);
+  assert(parsedResponse["heating"]["durationSeconds"] == 900);
+  assert(parsedResponse["heating"]["shutdownReason"] == "target");
+  assert(parsedResponse["heating"]["boilerC"] == 40.25);
+  assert(parsedResponse["heating"]["physicalMaxSeconds"] == 1800);
   assert(parsedResponse["localKey"].isNull() && parsedResponse["deviceId"].isNull());
   StaticJsonDocument<64> undersizedResponse;
   assert(!boiler_web_api::populateStatus(undersizedResponse, api));
+  api.temperatureFresh = false;
   api.relay = displayRelay(false, false, false);
   api.lastConfirmedRelay = "UNKNOWN";
   api.hasLastUpdate = false;
   StaticJsonDocument<2304> unknownDocument;
   assert(boiler_web_api::populateStatus(unknownDocument, api));
   assert(unknownDocument["relay"] == "UNKNOWN");
+  assert(unknownDocument["heating"]["boilerC"].isNull());
   assert(unknownDocument["lastConfirmedAgeMs"].isNull());
   StaticJsonDocument<128> receipt;
   assert(boiler_web_api::populateCommandReceipt(receipt, Action::Refresh, 12));

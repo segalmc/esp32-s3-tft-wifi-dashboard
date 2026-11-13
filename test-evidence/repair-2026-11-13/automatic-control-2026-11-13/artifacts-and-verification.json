@@ -1,0 +1,18 @@
+{
+  "firmwareBytes": 1772576,
+  "firmwareSha256": "97cc917fcc97301193196619608028d4fee030f0168704374e274d44137e6270",
+  "apkBytes": 91320,
+  "apkSha256": "24c0fabd31b99a0114fca426cdd6cde0884c025f98850321c75c82b5a882ccc5",
+  "installedApkReadbackMatchesBuild": true,
+  "controlInitializedWithoutUsbCommands": true,
+  "serialSessionOpened": false,
+  "physicalUsbCableDetached": false,
+  "usbDetachLimitation": "Host device-node write access and noninteractive sudo unavailable; USB power/data cable retained",
+  "automatedOnRequestsSent": 0,
+  "userConfirmedTabletOnOff": true,
+  "confirmationDialogRemoved": true,
+  "legacyProxyEndpointStillResponds": true,
+  "autonomousPhysicalActivationAttempted": false,
+  "fullFlashEraseOrPartitionChange": false,
+  "observedUtc": "2026-11-13T18:49:44.099355+00:00"
+}

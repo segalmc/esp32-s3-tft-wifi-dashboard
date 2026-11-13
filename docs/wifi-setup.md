@@ -13,7 +13,7 @@ startup diagnostics, photograph, and eight metric cards are unchanged.
    the dashboard first appears. Record it in a password manager. It is never
    printed to Serial or included in the firmware source.
 3. Connect your phone to `NatureGlass-Setup` with that password. Open
-   `http://192.168.4.1/`. A captive-portal popup may appear, but phones differ;
+   `http://PRIVATE_DEVICE_IP/`. A captive-portal popup may appear, but phones differ;
    use the direct address if it does not.
 4. Select a scanned 2.4 GHz WPA2/WPA3 personal network or enter a hidden SSID,
    supply its 8–63 character password, and tap **Connect**. Open and enterprise

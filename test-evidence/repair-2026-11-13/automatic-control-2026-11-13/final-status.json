@@ -1,0 +1,53 @@
+{
+  "relay": "OFF",
+  "fresh": true,
+  "connected": true,
+  "monitorArmed": true,
+  "readGate": true,
+  "controlGate": true,
+  "leaseActive": false,
+  "commandId": 1,
+  "available": {
+    "refresh": true,
+    "reconnect": true,
+    "on": true,
+    "off": true
+  },
+  "heating": {
+    "active": false,
+    "shutdownPending": false,
+    "durationSeconds": 1800,
+    "targetC": 50,
+    "remainingSeconds": 0,
+    "deadlineEpoch": 0,
+    "shutdownReason": "none",
+    "temperatureFresh": true,
+    "boilerC": 24.69000053,
+    "physicalMaxSeconds": 1800
+  },
+  "controllerLink": "ESP-NOW",
+  "controllerMeasurementAgeMs": 1855,
+  "espNowDiagnostics": {
+    "rxDiscovery": 3,
+    "rxData": 34,
+    "rxQueueFull": 0,
+    "discoveryValid": 3,
+    "discoveryRejected": 0,
+    "discoveryPeerFailed": 0,
+    "discoveryReplyOk": 3,
+    "discoveryReplyFailed": 0,
+    "txMacOk": 37,
+    "txMacFailed": 0,
+    "rejectAuth": 0,
+    "rejectPeer": 0,
+    "rejectReplay": 0,
+    "rejectStorage": 0,
+    "rejectAcceptance": 0,
+    "ackGenerated": 34,
+    "ackSendFailures": 0,
+    "taskAgeMs": 636
+  },
+  "clockSynced": true,
+  "uptimeMs": 138020,
+  "observedUtc": "2026-11-13T18:49:59.242872+00:00"
+}

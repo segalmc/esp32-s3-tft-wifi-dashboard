@@ -15,6 +15,8 @@ IPAddress targetIp() {
 
 void TuyaControl::begin(NatureNetworkManager* network) {
   network_ = network;
+  state_.duration_seconds = 1800;
+  state_.target_c = 50;
   strncpy(state_.result, "idle", sizeof(state_.result));
   strncpy(state_.last_response_type, "none", sizeof(state_.last_response_type));
   strncpy(state_.last_failure, "none", sizeof(state_.last_failure));
@@ -32,7 +34,15 @@ TuyaControl::Snapshot TuyaControl::snapshot() const {
   Snapshot copy = state_;
   copy.busy = boiler_policy::busy(pending_, static_cast<uint8_t>(state_.progress));
   portEXIT_CRITICAL(&lock_);
-  const int64_t remaining = copy.lease_deadline_epoch - now;
+  int64_t remaining = copy.lease_deadline_epoch - now;
+  if (copy.session_monotonic) {
+    const uint32_t elapsed = static_cast<uint32_t>(millis() - copy.session_started_ms) / 1000;
+    const int64_t monotonic = elapsed < copy.session_budget_seconds ? copy.session_budget_seconds - elapsed : 0;
+    if (monotonic < remaining) remaining = monotonic;
+  }
+  if (copy.shutdown_pending) remaining = 0;
+  copy.temperature_valid = heating_session::freshTemperature(copy.temperature_valid,
+      copy.boiler_c, copy.temperature_received_ms, millis());
   copy.lease_remaining_s = copy.lease_active && remaining > 0 ?
       static_cast<uint32_t>(remaining) : 0;
   return copy;
@@ -44,7 +54,8 @@ bool TuyaControl::online() const {
          WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
 }
 
-TuyaControl::Accept TuyaControl::request(Request request, uint32_t* command_id) {
+TuyaControl::Accept TuyaControl::request(Request request, uint32_t* command_id,
+                                         uint32_t duration, uint32_t target) {
   const auto wifi = network_->snapshot();
   const int64_t now = time(nullptr);
   const bool wifi_connected = WiFi.status() == WL_CONNECTED;
@@ -52,6 +63,11 @@ TuyaControl::Accept TuyaControl::request(Request request, uint32_t* command_id) 
   Accept answer = Accept::Accepted;
   if (boiler_policy::busy(pending_, static_cast<uint8_t>(state_.progress)))
     answer = Accept::Busy;
+  else if (request == Request::On &&
+           (!heating_session::validDuration(duration) || !heating_session::validTarget(target)))
+    answer = Accept::InvalidSettings;
+  else if (request == Request::On && !heating_session::physicallyAllowed(duration))
+    answer = Accept::DurationRestricted;
   else if (!task_ready_) answer = Accept::Disabled;
   else if (request == Request::DisarmMonitor && state_.lease_active)
     answer = Accept::LeaseActive;
@@ -73,6 +89,12 @@ TuyaControl::Accept TuyaControl::request(Request request, uint32_t* command_id) 
     answer = Accept::StateUnknown;
   if (answer == Accept::Accepted) {
     boiler_policy::reserve(pending_, static_cast<uint8_t>(state_.progress));
+    if (request == Request::Off && state_.lease_active) {
+      if (!state_.shutdown_pending) state_.shutdown_reason = heating_session::Stop::Manual;
+      state_.shutdown_pending = true;
+    }
+    queued_duration_ = duration;
+    queued_target_ = target;
     state_.progress = Progress::Pending;
     strncpy(state_.result, "queued", sizeof(state_.result));
     ++state_.command_id;
@@ -111,25 +133,69 @@ void TuyaControl::setProgress(Progress progress, const char* result) {
   portEXIT_CRITICAL(&lock_);
 }
 
-bool TuyaControl::persistLease(int64_t now) {
-  const auto lease = boiler_policy::makeLease(now);
-  if (!storage_ready_ || !boiler_policy::saveLease(preferences_, lease)) return false;
+void TuyaControl::updateTemperature(bool valid, float boiler_c, uint32_t received_ms) {
+  portENTER_CRITICAL(&lock_);
+  state_.temperature_valid = valid;
+  state_.boiler_c = boiler_c;
+  state_.temperature_received_ms = received_ms;
+  portEXIT_CRITICAL(&lock_);
+}
+
+void TuyaControl::latchShutdown(heating_session::Stop reason) {
+  portENTER_CRITICAL(&lock_);
+  if (!state_.shutdown_pending) state_.shutdown_reason = reason;
+  state_.shutdown_pending = true;
+  portEXIT_CRITICAL(&lock_);
+}
+
+bool TuyaControl::persistLease(int64_t now, uint32_t duration, uint32_t target) {
+  if (!heating_session::physicallyAllowed(duration) || !heating_session::validTarget(target)) return false;
+  const auto lease = boiler_policy::makeLease(now, BoilerConfig{duration});
+  const auto record = heating_session::makeRecord(lease, target);
+  if (!storage_ready_ || !heating_session::saveRecord(preferences_, record, lease)) return false;
+  if (!boiler_policy::saveLease(preferences_, lease)) {
+    // A write may have reached flash even when readback fails: recover OFF, never ON.
+    recovery_required_ = preferences_.isKey(boiler_config::kLeaseKey);
+    if (recovery_required_) {
+      portENTER_CRITICAL(&lock_);
+      state_.lease_active = true;
+      state_.shutdown_pending = true;
+      state_.shutdown_reason = heating_session::Stop::Recovery;
+      portEXIT_CRITICAL(&lock_);
+    }
+    return false;
+  }
   lease_valid_ = true;
   lease_ = lease;
   lease_started_ms_ = millis();
   portENTER_CRITICAL(&lock_);
   state_.lease_active = true;
+  state_.duration_seconds = duration;
+  state_.target_c = target;
+  state_.shutdown_pending = false;
+  state_.shutdown_reason = heating_session::Stop::None;
+  state_.session_budget_seconds = duration;
+  state_.session_started_ms = lease_started_ms_;
+  state_.session_monotonic = true;
   state_.lease_deadline_epoch = lease.deadline;
   portEXIT_CRITICAL(&lock_);
   return true;
 }
 
 void TuyaControl::clearLease() {
-  if (lease_valid_ && !preferences_.remove(boiler_config::kLeaseKey)) return;
+  // Unreadable storage cannot establish that a hidden obligation was removed.
+  if (!nvs_open_) return;
+  if (preferences_.isKey(boiler_config::kLeaseKey) &&
+      (!preferences_.remove(boiler_config::kLeaseKey) || preferences_.isKey(boiler_config::kLeaseKey))) return;
+  // Remove metadata only after verified OFF and verified lease removal.
+  preferences_.remove(heating_session::kSessionKey);
+  recovery_required_ = false;
   lease_valid_ = false;
   lease_ = {};
   lease_started_ms_ = 0;
   portENTER_CRITICAL(&lock_);
+  state_.shutdown_pending = false;
+  state_.session_monotonic = false;
   state_.lease_active = false;
   state_.lease_deadline_epoch = 0;
   portEXIT_CRITICAL(&lock_);
@@ -292,11 +358,39 @@ void TuyaControl::execute(Request request) {
       setProgress(Progress::Failed, "relay is not confirmed OFF");
       return;
     }
-    if (!persistLease(now)) {
+    const auto temperature = snapshot();
+    if (heating_session::reached(queued_target_, temperature.temperature_valid, temperature.boiler_c)) {
+      portENTER_CRITICAL(&lock_);
+      state_.duration_seconds = queued_duration_;
+      state_.target_c = queued_target_;
+      state_.shutdown_reason = heating_session::Stop::Target;
+      portEXIT_CRITICAL(&lock_);
+      setProgress(Progress::Confirmed, "target already reached; remains OFF");
+      return;
+    }
+    const int64_t start = time(nullptr);
+    if (!boiler_policy::mayTurnOn(network_->snapshot().clock_synced, start, storage_ready_)) {
+      setProgress(Progress::Failed, "clock changed before ON");
+      return;
+    }
+    if (!persistLease(start, queued_duration_, queued_target_)) {
       setProgress(Progress::Failed, "deadline persistence failed");
       return;
     }
   }
+  if (target_on) {
+    const auto session = snapshot();
+    const auto wifi = network_->snapshot();
+    if (boiler_policy::due(lease_, time(nullptr), wifi.clock_synced) ||
+        heating_session::reached(session.target_c, session.temperature_valid, session.boiler_c)) {
+      latchShutdown(!wifi.clock_synced ? heating_session::Stop::Clock :
+          heating_session::reached(session.target_c, session.temperature_valid, session.boiler_c) ?
+          heating_session::Stop::Target : heating_session::Stop::Timer);
+      execute(Request::Off);
+      return;
+    }
+  }
+  if (!target_on && snapshot().lease_active) latchShutdown(heating_session::Stop::Manual);
   setProgress(Progress::Sending, target_on ? "sending ON once" : "sending OFF");
   const bool ack = connectSession() &&
       client_->setBooleanDps("1", target_on, static_cast<uint32_t>(now));
@@ -316,7 +410,9 @@ void TuyaControl::execute(Request request) {
   }
   if (matched) {
     if (!target_on) clearLease();
-    setProgress(Progress::Confirmed, target_on ? "ON verified" : "OFF verified");
+    if (!target_on && snapshot().lease_active)
+      setProgress(Progress::Uncertain, "OFF verified; lease removal failed");
+    else setProgress(Progress::Confirmed, target_on ? "ON verified" : "OFF verified");
   }
   else setProgress(Progress::Uncertain, ack ? "state did not verify" : "command outcome uncertain");
   // Never resend an uncertain ON. The persisted lease remains until OFF is verified.
@@ -343,11 +439,12 @@ void TuyaControl::run() {
   state_.reconcile_interval_ms = config.statusReconciliationMs;
   portEXIT_CRITICAL(&lock_);
   if (!client_ready) Serial.println("Tuya: client configuration unavailable");
-  storage_ready_ = preferences_.begin(boiler_config::kNvsNamespace, false);
+  nvs_open_ = preferences_.begin(boiler_config::kNvsNamespace, false);
+  storage_ready_ = nvs_open_;
   portENTER_CRITICAL(&lock_);
   state_.storage_ready = storage_ready_;
   portEXIT_CRITICAL(&lock_);
-  const auto gates = boiler_policy::bootGates(preferences_, storage_ready_);
+  const auto gates = boiler_policy::bootGates(storage_ready_);
   monitor_armed_ = gates.reads;
   portENTER_CRITICAL(&lock_);
   state_.monitor_armed = monitor_armed_;
@@ -361,15 +458,49 @@ void TuyaControl::run() {
       lease_ = lease;
       portENTER_CRITICAL(&lock_);
       state_.lease_active = true;
-      state_.lease_deadline_epoch = lease.deadline;
+      state_.lease_deadline_epoch = boiler_policy::effectiveDeadline(lease);
+      state_.target_c = 0; // Legacy leases never acquire a new target during migration.
+      state_.duration_seconds = static_cast<uint32_t>(lease.deadline - lease.created);
+      const int64_t recovered_now = time(nullptr);
+      const int64_t remaining = boiler_policy::effectiveDeadline(lease) - recovered_now;
+      state_.session_budget_seconds = remaining > 0 && remaining <= state_.duration_seconds ?
+          static_cast<uint32_t>(remaining) : 0;
+      state_.session_started_ms = millis();
+      state_.session_monotonic = true;
       portEXIT_CRITICAL(&lock_);
+      heating_session::Record record{};
+      if (heating_session::loadRecord(preferences_, record, lease)) {
+        portENTER_CRITICAL(&lock_);
+        state_.target_c = record.target;
+        portEXIT_CRITICAL(&lock_);
+      } else if (preferences_.isKey(heating_session::kSessionKey)) {
+        recovery_required_ = true;
+        latchShutdown(heating_session::Stop::Recovery);
+      } // Legacy leases keep their exact deadlines and have no temperature target.
     } else {
+      recovery_required_ = true;
+      portENTER_CRITICAL(&lock_);
+      state_.lease_active = true;
+      portEXIT_CRITICAL(&lock_);
+      latchShutdown(heating_session::Stop::Recovery);
       Serial.println("Tuya: invalid persisted deadline; control disabled pending service");
       storage_ready_ = false;
       portENTER_CRITICAL(&lock_);
       state_.storage_ready = false;
       portEXIT_CRITICAL(&lock_);
     }
+  }
+  if (!nvs_open_) {
+    // Do not authorize new relay traffic from an unreadable namespace. Retain
+    // visible uncertainty until storage and its existing authorizations recover.
+    recovery_required_ = true;
+    portENTER_CRITICAL(&lock_);
+    state_.lease_active = true;
+    state_.target_c = 0;
+    state_.duration_seconds = 0;
+    portEXIT_CRITICAL(&lock_);
+    latchShutdown(heating_session::Stop::Recovery);
+    setProgress(Progress::Uncertain, "NVS unavailable; obligation unknown");
   }
   uint32_t next_safety = millis();
   for (;;) {
@@ -388,11 +519,22 @@ void TuyaControl::run() {
       portEXIT_CRITICAL(&lock_);
     }
     const uint32_t ms = millis();
-    if (lease_valid_ && online() && boiler_policy::offRetryDue(ms, next_safety)) {
+    if (lease_valid_ || recovery_required_) {
       const auto wifi = network_->snapshot();
       const int64_t now = time(nullptr);
-      const bool monotonic_due = boiler_policy::monotonicLeaseDue(lease_started_ms_, ms);
-      if (monotonic_due || boiler_policy::due(lease_, now, wifi.clock_synced)) {
+      const auto session = snapshot();
+      const bool monotonic_due = session.session_monotonic &&
+          heating_session::elapsed(session.session_started_ms, ms, session.session_budget_seconds);
+      const bool timer_due = monotonic_due || boiler_policy::due(lease_, now, wifi.clock_synced);
+      if (!session.shutdown_pending) {
+        const auto reason = heating_session::stopReason(timer_due,
+            heating_session::reached(session.target_c, session.temperature_valid, session.boiler_c));
+        if (reason != heating_session::Stop::None) {
+          latchShutdown(!wifi.clock_synced ? heating_session::Stop::Clock : reason);
+          next_safety = ms;
+        }
+      }
+      if (nvs_open_ && snapshot().shutdown_pending && online() && boiler_policy::offRetryDue(ms, next_safety)) {
         portENTER_CRITICAL(&lock_);
         const bool reserved = boiler_policy::reserve(pending_, static_cast<uint8_t>(state_.progress));
         portEXIT_CRITICAL(&lock_);
@@ -407,6 +549,57 @@ void TuyaControl::run() {
           pending_ = false;
           portEXIT_CRITICAL(&lock_);
           next_safety = boiler_policy::nextOffRetryMs(millis());
+        }
+      }
+    }
+    // External physical Tuya changes: reconcile only from the single Tuya I/O task.
+    // Do not trust an unsolicited push alone to create/remove a safety lease.
+    // An ON without durable protection must be driven OFF and retried.
+    static uint32_t next_external_check_ms = 0;
+    const uint32_t reconcile_ms = millis();
+    if (online() && boiler_policy::offRetryDue(reconcile_ms, next_external_check_ms)) {
+      next_external_check_ms = reconcile_ms + 2000U;
+      const Snapshot observed = snapshot();
+      if (!observed.busy && observed.connected &&
+          !boiler_policy::stale(observed.last_confirmed_ms, reconcile_ms) &&
+          ((observed.relay == Relay::On && !observed.lease_active) ||
+           (observed.relay == Relay::Off && observed.lease_active &&
+            !observed.shutdown_pending))) {
+        // Independent authenticated status confirmation before changing durable state.
+        const Relay expected = observed.relay;
+        if (readStatus() && snapshot().relay == expected) {
+          if (expected == Relay::Off) {
+            clearLease();
+            if (snapshot().lease_active) {
+              latchShutdown(heating_session::Stop::Recovery);
+              next_safety = millis();
+            } else {
+              setProgress(Progress::Confirmed, "external OFF verified");
+            }
+          } else {
+            const auto wifi = network_->snapshot();
+            const int64_t now_epoch = time(nullptr);
+            if (boiler_policy::mayTurnOn(wifi.clock_synced, now_epoch, storage_ready_) &&
+                persistLease(now_epoch, heating_session::kDefaultSeconds,
+                             heating_session::kDefaultTargetC)) {
+              setProgress(Progress::Confirmed, "external ON: 30m 50C lease");
+              const auto active = snapshot();
+              if (heating_session::reached(active.target_c,
+                                           active.temperature_valid, active.boiler_c)) {
+                latchShutdown(heating_session::Stop::Target);
+                next_safety = millis();
+              }
+            } else {
+              // No durable lease: never leave a confirmed external ON untracked.
+              recovery_required_ = true;
+              portENTER_CRITICAL(&lock_);
+              state_.lease_active = true;
+              portEXIT_CRITICAL(&lock_);
+              latchShutdown(heating_session::Stop::Recovery);
+              setProgress(Progress::Uncertain, "external ON: fail-safe OFF required");
+              next_safety = millis();
+            }
+          }
         }
       }
     }
@@ -460,6 +653,8 @@ const char* TuyaControl::acceptName(Accept value) {
     case Accept::Clock: return "NTP clock unavailable";
     case Accept::Storage: return "deadline storage unavailable";
     case Accept::LeaseActive: return "shutdown deadline already active";
+    case Accept::InvalidSettings: return "invalid heating settings";
+    case Accept::DurationRestricted: return "45/60 minutes require safety approval";
     case Accept::StateUnknown: return "confirm OFF before ON";
   }
   return "invalid request";
