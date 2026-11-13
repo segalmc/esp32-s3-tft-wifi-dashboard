@@ -1,0 +1,68 @@
+[
+  {
+    "test": "test_network_policy",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "test_temperature_history",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "test_local_wss_policy",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "local_wss_receive_policy_test",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "local_wss_session_policy_test",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "local_wss_clock_recovery_test",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "local_wss_tls_failure_policy_test",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "test_local_wss_listener_callsite",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "test_local_wss_orphan_callsite",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "test_local_wss_receive_callsite",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "test_local_wss_client",
+    "result": "PASS",
+    "exitCode": 0
+  },
+  {
+    "test": "tuya_protocol_mocks",
+    "result": "FAIL",
+    "reason": "Suite compiled using existing local OpenSSL headers; 322 checks, 314 passed and 8 native loopback-listener checks failed because sandbox prohibits socket creation. Native socket cases NOT TESTED; pure mock checks passed."
+  },
+  {
+    "test": "actual_heating_controller_integration",
+    "result": "PASS",
+    "scenarios": 27,
+    "command": "python3 tools/test_heating_control.py"
+  }
+]

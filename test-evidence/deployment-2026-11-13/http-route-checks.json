@@ -1,0 +1,7 @@
+{
+  "challengeStatus": 200,
+  "challengeFormatValid": true,
+  "emptyUnauthenticatedTelemetryRejected": 413,
+  "syntheticTelemetrySent": false,
+  "note": "Initial probe expected 400; actual bounded-body validator correctly rejects undersized payload with 413."
+}

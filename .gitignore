@@ -9,3 +9,26 @@ LocalWssConfig.h
 .local-wss/
 .boiler-web-password
 __pycache__/
+
+# Private configuration and generated release artifacts (restore separately).
+.pio/
+.gradle/
+__pycache__/
+*.pyc
+*.apk
+*.idsig
+*.local.hpp
+*.local.h
+**/include/secrets.h
+**/include/LocalHttpTelemetryConfig.h
+.env
+.env.*
+!.env.example
+.credential-backup/
+backup-external-*/
+*.bak
+*.bak-*
+logs/
+node_modules/
+dist/
+test-artifacts/

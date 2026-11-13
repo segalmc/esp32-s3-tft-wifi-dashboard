@@ -4,6 +4,15 @@
 
 namespace boiler_web_api {
 struct StatusData {
+  bool heatingActive = false;
+  bool shutdownPending = false;
+  uint32_t durationSeconds = 1800;
+  uint32_t targetC = 50;
+  uint32_t remainingSeconds = 0;
+  int64_t deadlineEpoch = 0;
+  const char* shutdownReason = "none";
+  bool temperatureFresh = false;
+  float boilerC = 0;
   const char* relay = "UNKNOWN";
   const char* lastConfirmedRelay = "UNKNOWN";
   bool connected = false;
@@ -61,6 +70,18 @@ bool populateStatus(Document& document, const StatusData& data) {
   document["result"] = data.result;
   document["commandId"] = data.commandId;
   document["busy"] = data.busy;
+  JsonObject heating = document.createNestedObject("heating");
+  heating["active"] = data.heatingActive;
+  heating["shutdownPending"] = data.shutdownPending;
+  heating["durationSeconds"] = data.durationSeconds;
+  heating["targetC"] = data.targetC;
+  heating["remainingSeconds"] = data.remainingSeconds;
+  heating["deadlineEpoch"] = data.deadlineEpoch;
+  heating["shutdownReason"] = data.shutdownReason;
+  heating["temperatureFresh"] = data.temperatureFresh;
+  if (data.temperatureFresh) heating["boilerC"] = data.boilerC;
+  else heating["boilerC"] = nullptr;
+  heating["physicalMaxSeconds"] = 1800;
   JsonObject actions = document.createNestedObject("available");
   actions["refresh"] = boiler_web_policy::canOffer(boiler_web_policy::Action::Refresh, data.availability);
   actions["reconnect"] = boiler_web_policy::canOffer(boiler_web_policy::Action::Reconnect, data.availability);

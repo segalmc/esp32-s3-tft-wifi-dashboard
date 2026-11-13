@@ -205,6 +205,15 @@ void BoilerWeb::status() {
   data.readGate = state.reads_enabled;
   data.controlGate = state.control_enabled;
   data.leaseActive = state.lease_active;
+  data.heatingActive = state.lease_active;
+  data.shutdownPending = state.shutdown_pending;
+  data.durationSeconds = state.duration_seconds;
+  data.targetC = state.target_c;
+  data.remainingSeconds = state.lease_remaining_s;
+  data.deadlineEpoch = state.lease_deadline_epoch;
+  data.shutdownReason = heating_session::reason(state.shutdown_reason);
+  data.temperatureFresh = state.temperature_valid;
+  data.boilerC = state.boiler_c;
   data.progress = TuyaControl::progressName(state.progress);
   data.result = state.result;
   data.commandId = state.command_id;
@@ -232,7 +241,7 @@ void BoilerWeb::status() {
   data.otaPhase = otaPhaseName(ota.phase);
   data.otaPercent = ota.percent;
   data.otaError = ota.error;
-  DynamicJsonDocument document(2304);
+  DynamicJsonDocument document(3072);
   if (!boiler_web_api::populateStatus(document, data))
     return reject(503, "status unavailable");
   String body;
@@ -243,9 +252,8 @@ void BoilerWeb::status() {
 }
 void BoilerWeb::command() {
   if (!csrfValid()) return reject(403, "forbidden");
-  if (server_->clientContentLength() > 64) return reject(413, "request too large");
-  if (server_->args() != 1 ||
-      (!server_->hasArg("action") && !server_->hasArg("target")))
+  if (server_->clientContentLength() > 128) return reject(413, "request too large");
+  if (server_->hasArg("action") == server_->hasArg("target"))
     return reject(400, "invalid action");
   const bool legacyTarget = server_->hasArg("target");
   const String actionText = server_->arg(legacyTarget ? "target" : "action");
@@ -253,6 +261,20 @@ void BoilerWeb::command() {
   if (legacyTarget && action != boiler_web_policy::Action::On &&
       action != boiler_web_policy::Action::Off)
     return reject(400, "invalid action");
+  const bool settings = server_->hasArg("durationSeconds") || server_->hasArg("targetC");
+  if (server_->args() != (settings ? 3 : 1) ||
+      (settings && (legacyTarget || action != boiler_web_policy::Action::On ||
+       !server_->hasArg("durationSeconds") || !server_->hasArg("targetC"))))
+    return reject(400, "invalid heating settings");
+  uint32_t duration = heating_session::kDefaultSeconds;
+  uint32_t target = heating_session::kDefaultTargetC;
+  if (settings) {
+    const String durationText = server_->arg("durationSeconds");
+    const String targetText = server_->arg("targetC");
+    // Strict canonical integers: no signs, whitespace, suffixes or partial parsing.
+    if (!heating_session::parseSettings(durationText.c_str(), targetText.c_str(), duration, target))
+      return reject(400, "invalid heating settings");
+  }
   TuyaControl::Request request;
   switch (action) {
     case boiler_web_policy::Action::Refresh: request = TuyaControl::Request::Status; break;
@@ -262,9 +284,11 @@ void BoilerWeb::command() {
     default: return reject(400, "invalid action");
   }
   uint32_t id = 0;
-  const auto accepted = control_->request(request, &id);
+  const auto accepted = control_->request(request, &id, duration, target);
   if (accepted != TuyaControl::Accept::Accepted)
-    return reject(accepted == TuyaControl::Accept::Busy ? 409 : 503, TuyaControl::acceptName(accepted));
+    return reject(accepted == TuyaControl::Accept::Busy ? 409 :
+        accepted == TuyaControl::Accept::InvalidSettings ? 400 :
+        accepted == TuyaControl::Accept::DurationRestricted ? 422 : 503, TuyaControl::acceptName(accepted));
   StaticJsonDocument<128> receipt;
   if (!boiler_web_api::populateCommandReceipt(receipt, action, id))
     return reject(503, "response unavailable");

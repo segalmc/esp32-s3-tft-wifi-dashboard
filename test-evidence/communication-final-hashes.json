@@ -1,0 +1,36 @@
+[
+  {
+    "repository": "hot_water_ctrl_arduino",
+    "trackedFilesCompared": 19,
+    "changedFiles": []
+  },
+  {
+    "repository": "esp32-s3-tft-wifi-dashboard",
+    "trackedFilesCompared": 49,
+    "changedFiles": [
+      "include/BoilerPolicy.h",
+      "include/BoilerWebApi.h",
+      "include/TuyaControl.h",
+      "src/BoilerWeb.cpp",
+      "src/TuyaControl.cpp",
+      "src/main.cpp"
+    ],
+    "protectedFiles": [
+      "src/NetworkManager.cpp",
+      "include/NetworkManager.h",
+      "include/NetworkPolicy.h",
+      "src/LocalWssServer.cpp",
+      "include/LocalWssServer.h",
+      "include/LocalWssPolicy.h",
+      "include/LocalWssReceivePolicy.h",
+      "include/LocalWssSessionPolicy.h",
+      "include/LocalWssClockPolicy.h",
+      "include/LocalWssTlsFailurePolicy.h",
+      "lib/TuyaLocalClient/src/TuyaLocalClient.cpp",
+      "lib/TuyaLocalClient/src/TuyaLocalClientNative.cpp",
+      "lib/TuyaLocalClient/src/TuyaSocketTransport.cpp",
+      "include/TemperatureHistory.h"
+    ],
+    "protectedUnchanged": true
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "unauthenticatedStatus": 401,
+  "existingPasswordLogin": 200,
+  "missingCsrf": 403,
+  "foreignOrigin": 403,
+  "authenticatedReadOnlyRefresh": 202,
+  "heatingFields": [
+    "active",
+    "shutdownPending",
+    "durationSeconds",
+    "targetC",
+    "remainingSeconds",
+    "deadlineEpoch",
+    "shutdownReason",
+    "temperatureFresh",
+    "boilerC",
+    "physicalMaxSeconds"
+  ],
+  "safetyAssertions": "PASS"
+}

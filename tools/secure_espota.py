@@ -9,7 +9,6 @@ import random
 import stat
 import sys
 
-
 ALPHABET = frozenset("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
 PASSWORD_PATH = Path.home() / ".config" / "nature-glass" / "ota-password"
 
@@ -26,9 +25,15 @@ def load_password(path=PASSWORD_PATH):
     descriptor = os.open(path, flags)
     try:
         info = os.fstat(descriptor)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
-            raise ValueError("OTA secret file must be owned by this user, regular, and mode 0600")
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_nlink != 1
+        ):
+            raise ValueError(
+                "OTA secret file must be owned by this user, regular, and mode 0600"
+            )
         raw = os.read(descriptor, 64)
     finally:
         os.close(descriptor)
@@ -52,8 +57,16 @@ def upload(espota_path, host, firmware_path, password):
     local_port = random.SystemRandom().randint(10000, 60000)
     # This calls the same transport used by PlatformIO's normal espota command.
     # The secret exists only in this process and the authenticated exchange.
-    return espota.serve(host, "0.0.0.0", 3232, local_port, password,
-                        firmware_path, espota.FLASH)
+    return espota.serve(
+        remote_addr=host,
+        local_addr="0.0.0.0",
+        remote_port=3232,
+        local_port=local_port,
+        password=password,
+        md5_target=None,
+        filename=firmware_path,
+        command=espota.FLASH,
+    )
 
 
 def main(argv):

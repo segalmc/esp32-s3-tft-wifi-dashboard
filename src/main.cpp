@@ -46,7 +46,11 @@ void loop() {
   system_monitor.update(now_ms);
 #if TFT_HARDWARE_ENABLED
   display_manager.updateBoiler(tuya_control.snapshot());
-  display_manager.updateTelemetry(local_wss.telemetry());
+  const auto heating_telemetry = local_wss.telemetry();
+  tuya_control.updateTemperature(heating_telemetry.snapshot_ok && heating_telemetry.valid &&
+      !heating_telemetry.stale && strcmp(heating_telemetry.quality, "reported") == 0,
+      heating_telemetry.boiler_c, heating_telemetry.received_ms);
+  display_manager.updateTelemetry(heating_telemetry);
 #endif
   display_manager.update(now_ms);
 #if TFT_HARDWARE_ENABLED

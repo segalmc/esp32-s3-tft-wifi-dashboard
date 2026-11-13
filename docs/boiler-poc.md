@@ -16,6 +16,15 @@ It fails closed if a required value is missing or inconsistent. It writes
 ignored. Keep the password file private; it contains the separate Web password.
 Never copy either file into a commit or report.
 
+The Web login accepts a password of 24–128 bytes. If the ignored password file
+needs a local update, run `python3 tools/set_boiler_web_password.py` in an
+interactive terminal. It prompts without echo, confirms the value, regenerates
+the ignored header, and verifies the generated hash without printing either
+value. It never uploads firmware. A build reads `include/secrets.h`; editing
+`.boiler-web-password` alone leaves the compiled hash unchanged. Build with
+`pio run -e esp32-s3-n16r8-tft` after provisioning, and use a separate,
+explicitly approved upload step later.
+
 On a new image, monitoring is **disarmed** and no Tuya connection is opened.
 After the proxy has been stopped and its socket verified closed, a USB Serial
 operator can persistently arm monitoring. It then resumes automatically when
@@ -327,3 +336,32 @@ session. A Wi-Fi/IP change or a second login would also clear or replace the
 session. No boot/Wi-Fi events were captured in that window, so the exact cause
 is unconfirmed. The next approved test should open Serial and establish a stable
 boot before logging in, and record boot/Wi-Fi events if a session is lost.
+
+
+## Heating sessions (offline implementation, 2026-11-13)
+
+Authenticated `POST /api/command` accepts `action=on&durationSeconds=900&targetC=40`.
+Durations are 900/1800/2700/3600 seconds and targets 40/50/60°C; omitted settings
+retain the safe 1800-second/50°C defaults. Both fields must be present together.
+45/60-minute requests receive HTTP 422 and cannot energize the relay. The physical
+configuration and legacy lease formats still enforce at most 1800 seconds.
+All existing authentication, Origin, CSRF, USB gates and asynchronous command IDs
+remain authoritative; HTTP 202 means queued, never verified ON.
+
+`GET /api/status` adds `heating`: `active`, `shutdownPending`, `durationSeconds`,
+`targetC`, `remainingSeconds`, `deadlineEpoch`, `shutdownReason`, `temperatureFresh`,
+`boilerC`, and `physicalMaxSeconds`. Unknown recovered target is zero; stale or
+invalid boiler temperature is null. Active includes uncertain shutdown obligations.
+Timer and monotonic time enforce OFF independently of tablet activity. Fresh
+existing boiler telemetry can end a session earlier; solar temperature never does.
+Shutdown requests latch across network loss, and OFF retries retain the obligation
+until authenticated OFF and verified NVS lease removal. An already-satisfied target
+leaves verified OFF without sending ON.
+
+New session metadata is read back before the unchanged lease is written/read back
+and ON is sent once. Legacy lease timestamps are never rewritten or extended.
+Absent metadata preserves legacy timer recovery without inventing a target;
+corrupt present metadata or corrupt lease storage causes conservative recovery.
+Unreadable NVS exposes pending uncertainty and blocks ON without inventing USB
+control authorization. No extended lease format is enabled. Review and evidence:
+[test-evidence/FINAL-REPORT.md](../test-evidence/FINAL-REPORT.md).

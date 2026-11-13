@@ -10,7 +10,9 @@ import re
 import secrets
 
 ROOT = Path(__file__).resolve().parents[1]
-PROXY = Path('/home/michael/hotWaterCtrl/localProxyTuya')
+PROXY = ROOT.parent / 'hotWaterCtrl' / 'localProxyTuya'
+if not (PROXY / 'bridge.js').is_file():
+    PROXY = Path.home() / 'hotWaterCtrl' / 'localProxyTuya'
 
 
 def require(pattern, source, name):
@@ -58,9 +60,9 @@ except ValueError:
 
 password_path = ROOT / '.boiler-web-password'
 if password_path.exists():
-    password = password_path.read_text().strip()
-    if len(password) < 24:
-        raise SystemExit('Existing Web password is too short')
+    password = password_path.read_text().rstrip('\r\n')
+    if password != password.strip() or not 24 <= len(password.encode('utf-8')) <= 128:
+        raise SystemExit('Existing Web password must be 24–128 bytes without surrounding whitespace')
 else:
     password = secrets.token_urlsafe(24)
     fd = os.open(password_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

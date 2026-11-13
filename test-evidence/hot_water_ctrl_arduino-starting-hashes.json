@@ -1,0 +1,21 @@
+{
+  "include/README": "af0e186680b645fa539e1db9ec876c13bc54478bbd967c1a916bf486f15a11c4",
+  "lib/README": "1539fe2ac9971f4dd76bea8967a62d938ddbefef160bd74972b6a8e51e586082",
+  "platformio.ini": "4e10364fad94878bf0384cd51eae4d99c97ff249980e3720d4e5f403dcc81e27",
+  "src/arduino-code.code-workspace": "7b821efac0fa011e6b2291ebb699730853f8c16794e9fd33457d1927983a7960",
+  "src/display_service.cpp": "1fda26bbd15da574aae9bebeec3608240bdd6e58315aed8c3c309fb6e6f0206c",
+  "src/display_service.h": "b8b61bea415431d05bb84bdb5aa7b79255b3d604d1bef0a3c4226643982a36e5",
+  "src/firebase_service.cpp": "780e2ea820b6750505fd3535d396b869ecd1812a91fa5d2fefc5b81decfe28e4",
+  "src/firebase_service.h": "4c23255af7b74ea75bea7f77b039595d9476c3ebb4544dceec122e90f30c8474",
+  "src/main.cpp": "f6c417f5ef45ad34e2a194363efc5cd74ba5b96f5235bbbfc82e5e5c2851a9e2",
+  "src/mqtt_client.cpp": "7101881617911395c049f7d9ed88017d2058b680fc393d8bc08bef2c39cf94e8",
+  "src/mqtt_client.h": "5b8952ea8c3843cc71e0671c5650f23862951d01add2704bfb59a2b6b9a6e127",
+  "src/switch_service.cpp": "9de54fa662539bbc365dc32d964b67cd50b628467263502ccc836d69cc90e3fe",
+  "src/switch_service.h": "30575bd058f8110822f4f795a43ac2f6a9837e48566995a4097f629cce7f0722",
+  "src/temperature_service.cpp": "378a2dce6b670182fc3abb5db7912cbbaafd99f7496c00f8fdc163c58e4666a7",
+  "src/temperature_service.h": "4bc4fe4cbbf98bb729654784ce1acc509666d9551c691e9fc4d63f04ee02a660",
+  "src/valve_control_service.cpp": "5e66c58b711a8c8a71188077df74a656eb88183fd611f9248fba3825a011e8be",
+  "src/valve_control_service.h": "db4c1e04cac35afa769420ff8d5de85aa26d63b3a6c8d4734dd21445a82627e6",
+  "src/valve_service.cpp": "00de0420e5e9bb0715a527eb67222c58a7a1981362715f3f7419b3172cbbf0e6",
+  "src/valve_service.h": "2b39a7dfb07773ac1d2bbfcf49789de0b7e5e45ec79adddff3367934accfebc1"
+}

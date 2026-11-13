@@ -77,7 +77,7 @@ malformed, symlinked, owned by another user, or has looser permissions.
 ## Wireless upload from VS Code or terminal
 
 The default PlatformIO environment is now `esp32-s3-n16r8-tft-ota`. With the
-device online at `192.168.31.230`, use VS Code's PlatformIO **Upload** button
+device online at `PRIVATE_DEVICE_IP`, use VS Code's PlatformIO **Upload** button
 or run:
 
 ```sh
@@ -89,7 +89,7 @@ No password prompt is needed after the file is prepared. Set
 IPv4 override, or use `--upload-port` for one terminal upload:
 
 ```sh
-"$HOME/.platformio/penv/bin/pio" run -e esp32-s3-n16r8-tft-ota -t upload --upload-port 192.168.31.231
+"$HOME/.platformio/penv/bin/pio" run -e esp32-s3-n16r8-tft-ota -t upload --upload-port PRIVATE_DEVICE_IP
 ```
 
 The local environment variable takes precedence if both are set. The

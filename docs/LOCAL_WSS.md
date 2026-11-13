@@ -14,7 +14,7 @@ Copy `include/LocalWssConfig.example.h` to ignored
 The generator creates ignored files under `.local-wss/`: a short-lived CA,
 hostname-matching server certificate and key, and a client identity with a
 unique 32-byte HMAC secret. It refuses to overwrite an existing set. The
-default development hostname is `natureglass.local`; provide a trusted local
+default development hostname is `[PRIVATE_VALUE_REDACTED]`; provide a trusted local
 DNS mapping to the S3 STA address. Alternatively, run the generator with
 `--hostname <existing-OTA-hostname.local>` to reuse the board's existing
 mDNS name without changing OTA behavior. The simulated client accepts a separate
