@@ -1,0 +1,300 @@
+{
+  "initialProblem": {
+    "source": "user-supplied pre-investigation status; initial serial open interrupted this state",
+    "controllerLink": "OFFLINE",
+    "measurementAgeMs": 759824,
+    "rxDiscovery": 102,
+    "rxData": 37,
+    "discoveryReplyOk": 89,
+    "discoveryReplyFailed": 13,
+    "ackGenerated": 37
+  },
+  "serialReaderStoppedBeforeFix": {
+    "firstUtc": "2026-11-13T16:33:53.525383+00:00",
+    "lastUtc": "2026-11-13T16:37:47.105077+00:00",
+    "elapsedSeconds": 233.579694,
+    "samples": 47,
+    "errorSamples": [],
+    "maxPollGapSeconds": 5.194047,
+    "links": {
+      "ESP-NOW": 15,
+      "HTTP FALLBACK": 32
+    },
+    "maxMeasurementAgeMs": 5648,
+    "maxTaskAgeMs": 11185,
+    "taskAgeWrapSamples": 0,
+    "maxTaskAgeExcludingWrapMs": 11185,
+    "firstCounters": {
+      "rxDiscovery": 3,
+      "rxData": 8,
+      "rxQueueFull": 0,
+      "discoveryValid": 3,
+      "discoveryRejected": 0,
+      "discoveryPeerFailed": 0,
+      "discoveryReplyOk": 3,
+      "discoveryReplyFailed": 0,
+      "txMacOk": 11,
+      "txMacFailed": 0,
+      "rejectAuth": 0,
+      "rejectPeer": 0,
+      "rejectReplay": 0,
+      "rejectStorage": 0,
+      "rejectAcceptance": 0,
+      "ackGenerated": 8,
+      "ackSendFailures": 0,
+      "taskAgeMs": 854
+    },
+    "lastCounters": {
+      "rxDiscovery": 16,
+      "rxData": 33,
+      "rxQueueFull": 0,
+      "discoveryValid": 16,
+      "discoveryRejected": 0,
+      "discoveryPeerFailed": 0,
+      "discoveryReplyOk": 15,
+      "discoveryReplyFailed": 0,
+      "txMacOk": 49,
+      "txMacFailed": 0,
+      "rejectAuth": 0,
+      "rejectPeer": 0,
+      "rejectReplay": 0,
+      "rejectStorage": 0,
+      "rejectAcceptance": 0,
+      "ackGenerated": 33,
+      "ackSendFailures": 0,
+      "taskAgeMs": 4353
+    },
+    "relayStates": [
+      "OFF"
+    ],
+    "tuyaConnectedAll": true,
+    "controlGateFalseAll": true,
+    "commandIds": [
+      0
+    ],
+    "heatingTemperatureFreshAll": true,
+    "leaseInactiveAll": true
+  },
+  "serialReaderStoppedAfterUsbFix": {
+    "firstUtc": "2026-11-13T16:38:53.885283+00:00",
+    "lastUtc": "2026-11-13T16:42:52.040495+00:00",
+    "elapsedSeconds": 238.155212,
+    "samples": 48,
+    "errorSamples": [],
+    "maxPollGapSeconds": 5.098699,
+    "links": {
+      "ESP-NOW": 48
+    },
+    "maxMeasurementAgeMs": 3675,
+    "maxTaskAgeMs": 4294967293,
+    "taskAgeWrapSamples": 1,
+    "maxTaskAgeExcludingWrapMs": 982,
+    "firstCounters": {
+      "rxDiscovery": 3,
+      "rxData": 8,
+      "rxQueueFull": 0,
+      "discoveryValid": 3,
+      "discoveryRejected": 0,
+      "discoveryPeerFailed": 0,
+      "discoveryReplyOk": 3,
+      "discoveryReplyFailed": 0,
+      "txMacOk": 11,
+      "txMacFailed": 0,
+      "rejectAuth": 0,
+      "rejectPeer": 0,
+      "rejectReplay": 0,
+      "rejectStorage": 0,
+      "rejectAcceptance": 0,
+      "ackGenerated": 8,
+      "ackSendFailures": 0,
+      "taskAgeMs": 192
+    },
+    "lastCounters": {
+      "rxDiscovery": 3,
+      "rxData": 87,
+      "rxQueueFull": 0,
+      "discoveryValid": 3,
+      "discoveryRejected": 0,
+      "discoveryPeerFailed": 0,
+      "discoveryReplyOk": 3,
+      "discoveryReplyFailed": 0,
+      "txMacOk": 90,
+      "txMacFailed": 0,
+      "rejectAuth": 0,
+      "rejectPeer": 0,
+      "rejectReplay": 0,
+      "rejectStorage": 0,
+      "rejectAcceptance": 0,
+      "ackGenerated": 87,
+      "ackSendFailures": 0,
+      "taskAgeMs": 328
+    },
+    "relayStates": [
+      "OFF"
+    ],
+    "tuyaConnectedAll": true,
+    "controlGateFalseAll": true,
+    "commandIds": [
+      0
+    ],
+    "heatingTemperatureFreshAll": true,
+    "leaseInactiveAll": true
+  },
+  "bothTransportsSuppressed90Seconds": {
+    "firstUtc": "2026-11-13T16:43:02.195276+00:00",
+    "lastUtc": "2026-11-13T16:44:28.364924+00:00",
+    "elapsedSeconds": 86.169648,
+    "samples": 18,
+    "errorSamples": [],
+    "maxPollGapSeconds": 5.10547,
+    "links": {
+      "ESP-NOW": 6,
+      "OFFLINE": 12
+    },
+    "maxMeasurementAgeMs": 92016,
+    "maxTaskAgeMs": 924,
+    "taskAgeWrapSamples": 0,
+    "maxTaskAgeExcludingWrapMs": 924,
+    "firstCounters": {
+      "rxDiscovery": 3,
+      "rxData": 89,
+      "rxQueueFull": 0,
+      "discoveryValid": 3,
+      "discoveryRejected": 0,
+      "discoveryPeerFailed": 0,
+      "discoveryReplyOk": 3,
+      "discoveryReplyFailed": 0,
+      "txMacOk": 92,
+      "txMacFailed": 0,
+      "rejectAuth": 0,
+      "rejectPeer": 0,
+      "rejectReplay": 0,
+      "rejectStorage": 0,
+      "rejectAcceptance": 0,
+      "ackGenerated": 89,
+      "ackSendFailures": 0,
+      "taskAgeMs": 572
+    },
+    "lastCounters": {
+      "rxDiscovery": 3,
+      "rxData": 89,
+      "rxQueueFull": 0,
+      "discoveryValid": 3,
+      "discoveryRejected": 0,
+      "discoveryPeerFailed": 0,
+      "discoveryReplyOk": 3,
+      "discoveryReplyFailed": 0,
+      "txMacOk": 92,
+      "txMacFailed": 0,
+      "rejectAuth": 0,
+      "rejectPeer": 0,
+      "rejectReplay": 0,
+      "rejectStorage": 0,
+      "rejectAcceptance": 0,
+      "ackGenerated": 89,
+      "ackSendFailures": 0,
+      "taskAgeMs": 745
+    },
+    "relayStates": [
+      "OFF"
+    ],
+    "tuyaConnectedAll": true,
+    "controlGateFalseAll": true,
+    "commandIds": [
+      0
+    ],
+    "heatingTemperatureFreshAll": false,
+    "leaseInactiveAll": true
+  },
+  "finalSoak": {
+    "firstUtc": "2026-11-13T16:46:43.015371+00:00",
+    "lastUtc": "2026-11-13T16:56:51.343611+00:00",
+    "elapsedSeconds": 608.32824,
+    "samples": 121,
+    "errorSamples": [],
+    "maxPollGapSeconds": 5.165186,
+    "links": {
+      "ESP-NOW": 121
+    },
+    "maxMeasurementAgeMs": 3707,
+    "maxTaskAgeMs": 994,
+    "taskAgeWrapSamples": 0,
+    "maxTaskAgeExcludingWrapMs": 994,
+    "firstCounters": {
+      "rxDiscovery": 2,
+      "rxData": 8,
+      "rxQueueFull": 0,
+      "discoveryValid": 2,
+      "discoveryRejected": 0,
+      "discoveryPeerFailed": 0,
+      "discoveryReplyOk": 2,
+      "discoveryReplyFailed": 0,
+      "txMacOk": 10,
+      "txMacFailed": 0,
+      "rejectAuth": 0,
+      "rejectPeer": 0,
+      "rejectReplay": 0,
+      "rejectStorage": 0,
+      "rejectAcceptance": 0,
+      "ackGenerated": 8,
+      "ackSendFailures": 0,
+      "taskAgeMs": 125
+    },
+    "lastCounters": {
+      "rxDiscovery": 2,
+      "rxData": 211,
+      "rxQueueFull": 0,
+      "discoveryValid": 2,
+      "discoveryRejected": 0,
+      "discoveryPeerFailed": 0,
+      "discoveryReplyOk": 2,
+      "discoveryReplyFailed": 0,
+      "txMacOk": 213,
+      "txMacFailed": 0,
+      "rejectAuth": 0,
+      "rejectPeer": 0,
+      "rejectReplay": 0,
+      "rejectStorage": 0,
+      "rejectAcceptance": 0,
+      "ackGenerated": 211,
+      "ackSendFailures": 0,
+      "taskAgeMs": 399
+    },
+    "relayStates": [
+      "OFF"
+    ],
+    "tuyaConnectedAll": true,
+    "controlGateFalseAll": true,
+    "commandIds": [
+      0
+    ],
+    "heatingTemperatureFreshAll": true,
+    "leaseInactiveAll": true
+  },
+  "faultCommands": [
+    "BOTH_OFF_90 2026-11-13T16:42:58.959179+00:00",
+    "WIFI_RECONNECT_ONCE 2026-11-13T16:43:31.614919+00:00",
+    "ORIGINAL_RESET 2026-11-13T16:46:26.350383+00:00"
+  ],
+  "usbReaderStopWindows": [
+    "START 2026-11-13T16:33:52.134699+00:00",
+    "END 2026-11-13T16:37:52.134912+00:00",
+    "START 2026-11-13T16:38:53.166721+00:00",
+    "END 2026-11-13T16:42:53.166927+00:00",
+    "START 2026-11-13T16:48:17.084461+00:00",
+    "END 2026-11-13T16:56:17.084675+00:00"
+  ],
+  "android": {
+    "api": 16,
+    "installedApkMatchesBuild": true,
+    "sha256": "b7b33c844ddb68f2594c93cbc8b4822d24c7b550d4147071dd0badba623ac602",
+    "liveUiAndPresetsVerifiedBeforeAdbLoss": true,
+    "finalAdbState": "offline USB; network endpoint unreachable as of latest probe"
+  },
+  "finalFirmware": {
+    "bytes": 1772592,
+    "sha256": "c6a1cda9addb1044f85e03a8fe70293f18a880ba31e98763a68e0e9d1bc138d5",
+    "s3OtaSucceeded": true,
+    "originalFlashed": false
+  }
+}

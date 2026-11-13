@@ -1,0 +1,41 @@
+{
+  "controllerLink": "ESP-NOW",
+  "controllerMeasurementAgeMs": 3188,
+  "relay": "OFF",
+  "connected": true,
+  "controlGate": false,
+  "leaseActive": false,
+  "commandId": 0,
+  "heating": {
+    "active": false,
+    "shutdownPending": false,
+    "durationSeconds": 1800,
+    "targetC": 50,
+    "remainingSeconds": 0,
+    "deadlineEpoch": 0,
+    "shutdownReason": "none",
+    "temperatureFresh": true,
+    "boilerC": 24.5,
+    "physicalMaxSeconds": 1800
+  },
+  "espNowDiagnostics": {
+    "rxDiscovery": 2,
+    "rxData": 221,
+    "rxQueueFull": 0,
+    "discoveryValid": 2,
+    "discoveryRejected": 0,
+    "discoveryPeerFailed": 0,
+    "discoveryReplyOk": 2,
+    "discoveryReplyFailed": 0,
+    "txMacOk": 223,
+    "txMacFailed": 0,
+    "rejectAuth": 0,
+    "rejectPeer": 0,
+    "rejectReplay": 0,
+    "rejectStorage": 0,
+    "rejectAcceptance": 0,
+    "ackGenerated": 221,
+    "ackSendFailures": 0,
+    "taskAgeMs": 895
+  }
+}

@@ -8,6 +8,8 @@
 #include "TuyaControl.h"
 #include "BoilerWeb.h"
 #include "LocalHttpTelemetry.h"
+#include "OriginalTelemetryApi.h"
+#include "HeatingSessionPolicy.h"
 #endif
 
 #ifndef CONFIG_IDF_TARGET_ESP32S3
@@ -29,6 +31,9 @@ uint32_t max_dashboard_us = 0;
 
 void setup() {
   Serial.begin(115200);
+  // USB diagnostics must never wait for a host reader. Blocking here also
+  // delays discovery replies and encrypted ACKs in the telemetry task.
+  Serial.setTxTimeoutMs(0);
   Serial.println("Boot: ESP32-S3 Phase 2 diagnostics");
   system_monitor.begin();
   display_manager.begin();
@@ -46,7 +51,21 @@ void loop() {
   system_monitor.update(now_ms);
 #if TFT_HARDWARE_ENABLED
   display_manager.updateBoiler(tuya_control.snapshot());
-  display_manager.updateTelemetry(local_http.snapshot());
+  const auto heating_telemetry = local_http.snapshot();
+  const uint32_t heating_now_ms = millis();
+  const uint32_t measurement_age = original_telemetry_api::effective_age(
+      heating_now_ms - heating_telemetry.measurement_ms,
+      heating_telemetry.sample_age_at_receive_ms);
+  const bool temperature_valid = heating_telemetry.snapshot_ok &&
+      heating_telemetry.ever_message && heating_telemetry.ever_measurement &&
+      heating_now_ms - heating_telemetry.communication_ms <= 35000U &&
+      measurement_age <= http_telemetry::kLiveMs &&
+      measurement_age <= heating_session::kTemperatureMaxAgeMs &&
+      (heating_telemetry.flags & http_telemetry::kBoilerValid) &&
+      original_telemetry_api::temperature_valid(heating_telemetry.boiler_c);
+  tuya_control.updateTemperature(temperature_valid, heating_telemetry.boiler_c,
+                                heating_now_ms - measurement_age);
+  display_manager.updateTelemetry(heating_telemetry);
 #endif
   display_manager.update(now_ms);
 #if TFT_HARDWARE_ENABLED

@@ -5,6 +5,7 @@
 #include <Preferences.h>
 #include "NetworkManager.h"
 #include "BoilerPolicy.h"
+#include "HeatingSessionPolicy.h"
 #include "TuyaLocalClient.h"
 
 class TuyaControl {
@@ -12,8 +13,18 @@ class TuyaControl {
   enum class Relay : uint8_t { Unknown, Off, On };
   enum class Progress : uint8_t { Idle, Pending, Sending, Verifying, Confirmed, Uncertain, Failed };
   enum class Request : uint8_t { On, Off, Status, Reconnect, ArmMonitor, DisarmMonitor };
-  enum class Accept : uint8_t { Accepted, Busy, Disabled, Offline, Clock, Storage, LeaseActive, StateUnknown };
+  enum class Accept : uint8_t { Accepted, Busy, Disabled, Offline, Clock, Storage, LeaseActive, StateUnknown, InvalidSettings, DurationRestricted };
   struct Snapshot {
+    uint32_t duration_seconds;
+    uint32_t target_c;
+    bool shutdown_pending;
+    heating_session::Stop shutdown_reason;
+    bool temperature_valid;
+    float boiler_c;
+    uint32_t temperature_received_ms;
+    uint32_t session_budget_seconds;
+    uint32_t session_started_ms;
+    bool session_monotonic;
     Relay relay;
     Progress progress;
     bool connected;
@@ -44,7 +55,9 @@ class TuyaControl {
 
   void begin(NatureNetworkManager* network);
   Snapshot snapshot() const;
-  Accept request(Request request, uint32_t* command_id = nullptr);
+  Accept request(Request request, uint32_t* command_id = nullptr,
+                 uint32_t duration = 1800, uint32_t target = 50);
+  void updateTemperature(bool valid, float boiler_c, uint32_t received_ms);
   void enableReadsFromUsb();
   bool enableControlFromUsb();
   static const char* relayName(Relay value);
@@ -63,7 +76,8 @@ class TuyaControl {
   static void statusEntry(void* context, const String& json);
   void recordProtocol(bool valid, const char* failure);
   void execute(Request request);
-  bool persistLease(int64_t now);
+  bool persistLease(int64_t now, uint32_t duration, uint32_t target);
+  void latchShutdown(heating_session::Stop reason);
   void clearLease();
   void setProgress(Progress progress, const char* result);
   bool online() const;
@@ -73,6 +87,10 @@ class TuyaControl {
   Snapshot state_{};
   QueueHandle_t queue_ = nullptr;
   bool pending_ = false;
+  uint32_t queued_duration_ = 1800;
+  uint32_t queued_target_ = 50;
+  bool recovery_required_ = false;
+  bool nvs_open_ = false;
   bool storage_ready_ = false;
   bool task_ready_ = false;
   bool lease_valid_ = false;

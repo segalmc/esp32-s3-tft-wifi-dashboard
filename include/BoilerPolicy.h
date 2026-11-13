@@ -46,7 +46,7 @@ inline int64_t effectiveDeadline(const Lease& lease,
 inline bool due(const Lease& lease, int64_t now, bool ntpValid,
                 const BoilerConfig& config = boiler_config::kActive) {
   return validLease(lease) && (!ntpValid || !validTime(now) ||
-                                now >= effectiveDeadline(lease, config));
+                                now < lease.created || now >= effectiveDeadline(lease, config));
 }
 inline bool monotonicLeaseDue(uint32_t startedMs, uint32_t nowMs,
                               const BoilerConfig& config = boiler_config::kActive) {
@@ -89,9 +89,11 @@ struct BootGates {
   bool reads;
   bool control;
 };
-template <class Store>
-BootGates bootGates(Store& store, bool storageReady) {
-  return {storageReady && monitorArmed(store), false};
+inline BootGates bootGates(bool storageReady) {
+  // Normal operation is authorized by the authenticated HTTP API. Startup
+  // enables monitoring/control, never a relay command. Unreadable lease storage
+  // still fails closed rather than authorizing an untracked ON.
+  return {storageReady, storageReady};
 }
 template <class Store>
 bool armMonitor(Store& store) {

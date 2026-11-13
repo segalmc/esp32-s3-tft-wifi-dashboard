@@ -16,17 +16,24 @@ It fails closed if a required value is missing or inconsistent. It writes
 ignored. Keep the password file private; it contains the separate Web password.
 Never copy either file into a commit or report.
 
-On a new image, monitoring is **disarmed** and no Tuya connection is opened.
-After the proxy has been stopped and its socket verified closed, a USB Serial
-operator can persistently arm monitoring. It then resumes automatically when
-Wi-Fi returns or the ESP32 reboots. Physical control remains disabled after
-every boot. From a physically connected USB Serial terminal at 115200 baud:
+Current normal-operation policy (2026-11-13): every boot automatically enables
+monitoring, reading and control when lease storage is readable. No USB command
+or stored monitor-authorization marker is required, and initialization never
+sends ON. The authenticated HTTP API still validates every command; clock,
+confirmed relay state, persistent lease, physical duration and shutdown rules
+remain enforced. Unreadable storage fails closed. Wi-Fi and Tuya recovery reuse
+the existing client. Confirm sole Tuya ownership before physical activation.
+
+The gate fields remain in the status API for compatibility and runtime health.
+The USB commands below are optional maintenance tools. Disarming monitoring is
+temporary until reboot; historical manual-authorization procedures later in
+this document describe the superseded commissioning policy.
 
 | Command | Action |
 | --- | --- |
 | `tuya help` | List commands and gates |
-| `tuya monitor arm` | Persistently arm sole-owner monitoring after proxy shutdown |
-| `tuya monitor disarm` | Stop monitoring and remove the authorization; refused while a shutdown obligation is active |
+| `tuya monitor arm` | Resume monitoring and retain the legacy marker; normal boot no longer requires it |
+| `tuya monitor disarm` | Stop monitoring for this boot and remove the legacy marker; refused while a shutdown obligation is active |
 | `tuya enable reads` | Temporarily start monitoring for this boot; only after proxy shutdown |
 | `tuya enable control` | Open physical control for this boot only, after monitoring is armed |
 | `tuya status` | Print the last result and queue an authenticated read when allowed |

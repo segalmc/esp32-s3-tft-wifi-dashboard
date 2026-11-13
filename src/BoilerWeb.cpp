@@ -212,6 +212,15 @@ void BoilerWeb::status() {
   data.readGate = state.reads_enabled;
   data.controlGate = state.control_enabled;
   data.leaseActive = state.lease_active;
+  data.heatingActive = state.lease_active;
+  data.shutdownPending = state.shutdown_pending;
+  data.durationSeconds = state.duration_seconds;
+  data.targetC = state.target_c;
+  data.remainingSeconds = state.lease_remaining_s;
+  data.deadlineEpoch = state.lease_deadline_epoch;
+  data.shutdownReason = heating_session::reason(state.shutdown_reason);
+  data.temperatureFresh = state.temperature_valid;
+  data.boilerC = state.boiler_c;
   data.progress = TuyaControl::progressName(state.progress);
   data.result = state.result;
   data.commandId = state.command_id;
@@ -243,13 +252,16 @@ void BoilerWeb::status() {
   if (!boiler_web_api::populateStatus(document, data))
     return reject(503, "status unavailable");
   const auto link_state = telemetry_->snapshot();
+  // The receiver can update while status JSON is being prepared. Sample time
+  // after its snapshot so a newer timestamp cannot underflow an age.
+  const uint32_t link_now = millis();
   const auto link = controller_link::state(link_state.ever_message,
       static_cast<uint8_t>(link_state.transport),
       static_cast<uint8_t>(link_state.sender_intent),
-      now - link_state.communication_ms,
-      link_state.ever_now ? now - link_state.now_communication_ms : UINT32_MAX,
-      link_state.ever_http ? now - link_state.http_communication_ms : UINT32_MAX,
-      now);
+      link_now - link_state.communication_ms,
+      link_state.ever_now ? link_now - link_state.now_communication_ms : UINT32_MAX,
+      link_state.ever_http ? link_now - link_state.http_communication_ms : UINT32_MAX,
+      link_now);
   document["controllerLink"] = controller_link::name(link);
   document["controllerLastReceived"] = link_state.transport ==
       LocalHttpTelemetry::LinkTransport::EspNow ? "ESP-NOW" :
@@ -262,9 +274,9 @@ void BoilerWeb::status() {
   original_input.ever_message = link_state.ever_message;
   original_input.ever_measurement = link_state.ever_measurement;
   original_input.communication_age_ms = link_state.ever_message ?
-      static_cast<uint32_t>(now - link_state.communication_ms) : UINT32_MAX;
+      static_cast<uint32_t>(link_now - link_state.communication_ms) : UINT32_MAX;
   original_input.receive_age_ms = link_state.ever_measurement ?
-      static_cast<uint32_t>(now - link_state.measurement_ms) : UINT32_MAX;
+      static_cast<uint32_t>(link_now - link_state.measurement_ms) : UINT32_MAX;
   original_input.sample_age_at_receive_ms = link_state.sample_age_at_receive_ms;
   original_input.boiler_c = link_state.boiler_c;
   original_input.solar_c = link_state.solar_c;
@@ -297,7 +309,7 @@ void BoilerWeb::status() {
   diag["ackGenerated"] = link_state.now_acks;
   diag["ackSendFailures"] = link_state.now_ack_send_fail;
   diag["taskAgeMs"] = link_state.now_task_last_ms ?
-      static_cast<uint32_t>(now - link_state.now_task_last_ms) : UINT32_MAX;
+      static_cast<uint32_t>(link_now - link_state.now_task_last_ms) : UINT32_MAX;
   String body;
   body.reserve(2400);
   serializeJson(document, body);
@@ -306,9 +318,8 @@ void BoilerWeb::status() {
 }
 void BoilerWeb::command() {
   if (!csrfValid()) return reject(403, "forbidden");
-  if (server_->clientContentLength() > 64) return reject(413, "request too large");
-  if (server_->args() != 1 ||
-      (!server_->hasArg("action") && !server_->hasArg("target")))
+  if (server_->clientContentLength() > 128) return reject(413, "request too large");
+  if (server_->hasArg("action") == server_->hasArg("target"))
     return reject(400, "invalid action");
   const bool legacyTarget = server_->hasArg("target");
   const String actionText = server_->arg(legacyTarget ? "target" : "action");
@@ -316,6 +327,20 @@ void BoilerWeb::command() {
   if (legacyTarget && action != boiler_web_policy::Action::On &&
       action != boiler_web_policy::Action::Off)
     return reject(400, "invalid action");
+  const bool settings = server_->hasArg("durationSeconds") || server_->hasArg("targetC");
+  if (server_->args() != (settings ? 3 : 1) ||
+      (settings && (legacyTarget || action != boiler_web_policy::Action::On ||
+       !server_->hasArg("durationSeconds") || !server_->hasArg("targetC"))))
+    return reject(400, "invalid heating settings");
+  uint32_t duration = heating_session::kDefaultSeconds;
+  uint32_t target = heating_session::kDefaultTargetC;
+  if (settings) {
+    const String durationText = server_->arg("durationSeconds");
+    const String targetText = server_->arg("targetC");
+    // Strict canonical integers: no signs, whitespace, suffixes or partial parsing.
+    if (!heating_session::parseSettings(durationText.c_str(), targetText.c_str(), duration, target))
+      return reject(400, "invalid heating settings");
+  }
   TuyaControl::Request request;
   switch (action) {
     case boiler_web_policy::Action::Refresh: request = TuyaControl::Request::Status; break;
@@ -325,9 +350,11 @@ void BoilerWeb::command() {
     default: return reject(400, "invalid action");
   }
   uint32_t id = 0;
-  const auto accepted = control_->request(request, &id);
+  const auto accepted = control_->request(request, &id, duration, target);
   if (accepted != TuyaControl::Accept::Accepted)
-    return reject(accepted == TuyaControl::Accept::Busy ? 409 : 503, TuyaControl::acceptName(accepted));
+    return reject(accepted == TuyaControl::Accept::Busy ? 409 :
+        accepted == TuyaControl::Accept::InvalidSettings ? 400 :
+        accepted == TuyaControl::Accept::DurationRestricted ? 422 : 503, TuyaControl::acceptName(accepted));
   StaticJsonDocument<128> receipt;
   if (!boiler_web_api::populateCommandReceipt(receipt, action, id))
     return reject(503, "response unavailable");

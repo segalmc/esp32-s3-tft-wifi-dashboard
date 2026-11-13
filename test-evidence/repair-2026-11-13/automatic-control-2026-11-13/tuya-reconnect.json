@@ -1,0 +1,47 @@
+{
+  "commandId": 10,
+  "relay": "OFF",
+  "connected": true,
+  "fresh": true,
+  "controlGate": true,
+  "readGate": true,
+  "monitorArmed": true,
+  "available": {
+    "refresh": true,
+    "reconnect": true,
+    "on": true,
+    "off": true
+  },
+  "heating": {
+    "active": false,
+    "shutdownPending": false,
+    "durationSeconds": 900,
+    "targetC": 40,
+    "remainingSeconds": 0,
+    "deadlineEpoch": 0,
+    "shutdownReason": "manual",
+    "temperatureFresh": true,
+    "boilerC": 24.69000053,
+    "physicalMaxSeconds": 1800
+  },
+  "espNowDiagnostics": {
+    "rxDiscovery": 3,
+    "rxData": 65,
+    "rxQueueFull": 0,
+    "discoveryValid": 3,
+    "discoveryRejected": 0,
+    "discoveryPeerFailed": 0,
+    "discoveryReplyOk": 3,
+    "discoveryReplyFailed": 0,
+    "txMacOk": 68,
+    "txMacFailed": 0,
+    "rejectAuth": 0,
+    "rejectPeer": 0,
+    "rejectReplay": 0,
+    "rejectStorage": 0,
+    "rejectAcceptance": 0,
+    "ackGenerated": 65,
+    "ackSendFailures": 0,
+    "taskAgeMs": 85
+  }
+}

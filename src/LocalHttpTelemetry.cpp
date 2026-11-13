@@ -3,6 +3,7 @@
 #include "HttpTelemetryAuth.h"
 #include "HttpTelemetryAcceptance.h"
 #include "HttpTelemetryProtocol.h"
+#include "NowDiscoveryExchange.h"
 #include <esp_system.h>
 #include <esp_wifi.h>
 #include <esp_heap_caps.h>
@@ -499,26 +500,21 @@ void LocalHttpTelemetry::nowLoop() {
                 diag_discovery_reply_failed.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
-            if (!nowPeer(rx.mac, false)) {
-                diag_discovery_peer_failed.fetch_add(1, std::memory_order_relaxed);
-                continue;
-            }
-            const bool discovery_tx_ok =
-                now_diag_send(rx.mac,
+            const auto exchange = now_telemetry::discoveryExchange(
+                [this, &rx](bool encrypted) { return nowPeer(rx.mac, encrypted); },
+                [&rx, &reply] { return now_diag_send(rx.mac,
                               reinterpret_cast<const uint8_t*>(&reply),
-                              sizeof(reply), "NOW-DISCOVERY-TX");
-            if (!discovery_tx_ok) {
-                diag_discovery_reply_failed.fetch_add(1, std::memory_order_relaxed);
-                continue;
-            }
-            diag_discovery_reply_ok.fetch_add(1, std::memory_order_relaxed);
-            vTaskDelay(pdMS_TO_TICKS(40));
-            const bool peer_ready = nowPeer(rx.mac, true);
-            if (!peer_ready) {
+                              sizeof(reply), "NOW-DISCOVERY-TX"); },
+                [] { vTaskDelay(pdMS_TO_TICKS(40)); });
+            if (!exchange.clear_peer || !exchange.encrypted_peer)
                 diag_discovery_peer_failed.fetch_add(1, std::memory_order_relaxed);
+            if (exchange.clear_peer && !exchange.reply_sent)
+                diag_discovery_reply_failed.fetch_add(1, std::memory_order_relaxed);
+            if (exchange.reply_sent)
+                diag_discovery_reply_ok.fetch_add(1, std::memory_order_relaxed);
+            if (!exchange.encrypted_peer)
                 Serial.println("[NOW-DIAG] S3 encrypted peer setup FAILED");
-                continue;
-            }
+            if (!exchange.authorized()) continue;
             Serial.println("[NOW-DIAG] S3 encrypted peer ready");
             now_authorized_boot_ = request.sender_boot;
             memcpy(now_authorized_mac_, rx.mac, 6);
