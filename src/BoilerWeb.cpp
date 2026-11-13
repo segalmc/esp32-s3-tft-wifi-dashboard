@@ -32,7 +32,7 @@ void BoilerWeb::begin(NatureNetworkManager* network, TuyaControl* control,
   control_ = control;
   telemetry_ = telemetry;
   randomHex(login_csrf_, 16);
-  if (xTaskCreate(taskEntry, "boiler-web", 9216, this, 1, nullptr) != pdPASS)
+  if (xTaskCreate(taskEntry, "boiler-web", 12288, this, 1, nullptr) != pdPASS)
     Serial.println("Boiler Web: task unavailable");
 }
 void BoilerWeb::taskEntry(void* context) { static_cast<BoilerWeb*>(context)->run(); }
@@ -239,7 +239,7 @@ void BoilerWeb::status() {
   data.otaPhase = otaPhaseName(ota.phase);
   data.otaPercent = ota.percent;
   data.otaError = ota.error;
-  DynamicJsonDocument document(3072);
+  DynamicJsonDocument document(5120);
   if (!boiler_web_api::populateStatus(document, data))
     return reject(503, "status unavailable");
   const auto link_state = telemetry_->snapshot();
@@ -278,8 +278,28 @@ void BoilerWeb::status() {
   document["controllerHasMeasurement"] = link_state.ever_measurement;
   if (!boiler_web_api::populateOriginalTelemetry(document, original_input))
     return reject(503, "status unavailable");
+  JsonObject diag = document.createNestedObject("espNowDiagnostics");
+  diag["rxDiscovery"] = link_state.now_rx_discovery;
+  diag["rxData"] = link_state.now_rx_data;
+  diag["rxQueueFull"] = link_state.now_rx_queue_full;
+  diag["discoveryValid"] = link_state.now_discovery_valid;
+  diag["discoveryRejected"] = link_state.now_discovery_rejected;
+  diag["discoveryPeerFailed"] = link_state.now_discovery_peer_failed;
+  diag["discoveryReplyOk"] = link_state.now_discovery_reply_ok;
+  diag["discoveryReplyFailed"] = link_state.now_discovery_reply_failed;
+  diag["txMacOk"] = link_state.now_tx_ok;
+  diag["txMacFailed"] = link_state.now_tx_failed;
+  diag["rejectAuth"] = link_state.now_reject_auth;
+  diag["rejectPeer"] = link_state.now_reject_peer;
+  diag["rejectReplay"] = link_state.now_reject_replay;
+  diag["rejectStorage"] = link_state.now_reject_storage;
+  diag["rejectAcceptance"] = link_state.now_reject_accept;
+  diag["ackGenerated"] = link_state.now_acks;
+  diag["ackSendFailures"] = link_state.now_ack_send_fail;
+  diag["taskAgeMs"] = link_state.now_task_last_ms ?
+      static_cast<uint32_t>(now - link_state.now_task_last_ms) : UINT32_MAX;
   String body;
-  body.reserve(1800);
+  body.reserve(2400);
   serializeJson(document, body);
   headers();
   server_->send(200, "application/json", body);

@@ -26,6 +26,18 @@ std::atomic<uint32_t> now_rx_discovery{0};
 std::atomic<uint32_t> now_rx_data{0};
 std::atomic<uint32_t> now_rx_other{0};
 std::atomic<uint32_t> now_rx_queue_full{0};
+std::atomic<uint32_t> diag_discovery_valid{0};
+std::atomic<uint32_t> diag_discovery_rejected{0};
+std::atomic<uint32_t> diag_discovery_peer_failed{0};
+std::atomic<uint32_t> diag_discovery_reply_ok{0};
+std::atomic<uint32_t> diag_discovery_reply_failed{0};
+std::atomic<uint32_t> diag_reject_auth{0};
+std::atomic<uint32_t> diag_reject_peer{0};
+std::atomic<uint32_t> diag_reject_replay{0};
+std::atomic<uint32_t> diag_reject_storage{0};
+std::atomic<uint32_t> diag_reject_accept{0};
+std::atomic<uint32_t> diag_ack_send_fail{0};
+std::atomic<uint32_t> diag_task_last_ms{0};
 
 void now_diag_send_callback(
     const wifi_tx_info_t*,
@@ -459,6 +471,7 @@ void LocalHttpTelemetry::nowLoop() {
     NowRx rx{};
     uint32_t last_rx_report_ms = millis();
     for (;;) {
+        diag_task_last_ms.store(millis(), std::memory_order_relaxed);
         if (xQueueReceive(now_queue_, &rx, pdMS_TO_TICKS(1000)) != pdTRUE) continue;
         if (millis() - last_rx_report_ms >= 30000) {
             last_rx_report_ms = millis();
@@ -473,23 +486,36 @@ void LocalHttpTelemetry::nowLoop() {
             memcpy(&request, rx.bytes, sizeof(request));
             if (!discovery_valid(request, false, device_id_) ||
                 !verify_mac(key_, &request, offsetof(DiscoveryFrame, mac), request.mac)) {
+                diag_discovery_rejected.fetch_add(1, std::memory_order_relaxed);
                 if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(5)) == pdTRUE) {
                     ++state_.now_auth_failures; xSemaphoreGive(mutex_);
                 }
                 continue;
             }
+            diag_discovery_valid.fetch_add(1, std::memory_order_relaxed);
             DiscoveryFrame reply = request;
             reply.receiver_boot = server_boot_;
-            if (!mac(key_, &reply, offsetof(DiscoveryFrame, mac), reply.mac) ||
-                !nowPeer(rx.mac, false)) continue;
+            if (!mac(key_, &reply, offsetof(DiscoveryFrame, mac), reply.mac)) {
+                diag_discovery_reply_failed.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            if (!nowPeer(rx.mac, false)) {
+                diag_discovery_peer_failed.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
             const bool discovery_tx_ok =
                 now_diag_send(rx.mac,
                               reinterpret_cast<const uint8_t*>(&reply),
                               sizeof(reply), "NOW-DISCOVERY-TX");
-            if (!discovery_tx_ok) continue;
+            if (!discovery_tx_ok) {
+                diag_discovery_reply_failed.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            diag_discovery_reply_ok.fetch_add(1, std::memory_order_relaxed);
             vTaskDelay(pdMS_TO_TICKS(40));
             const bool peer_ready = nowPeer(rx.mac, true);
             if (!peer_ready) {
+                diag_discovery_peer_failed.fetch_add(1, std::memory_order_relaxed);
                 Serial.println("[NOW-DIAG] S3 encrypted peer setup FAILED");
                 continue;
             }
@@ -505,6 +531,7 @@ void LocalHttpTelemetry::nowLoop() {
         if (!data_valid(prefix, rx.length, device_id_, server_boot_) ||
             !verify_mac(key_, rx.bytes, rx.length - 32,
                         rx.bytes + rx.length - 32)) {
+            ++diag_reject_auth;
             if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(5)) == pdTRUE) {
                 ++state_.now_auth_failures; xSemaphoreGive(mutex_);
             }
@@ -512,22 +539,33 @@ void LocalHttpTelemetry::nowLoop() {
         }
         const BatchHeader& header = prefix.batch;
         if (header.sender_boot_nonce != now_authorized_boot_ ||
-            memcmp(rx.mac, now_authorized_mac_, 6) != 0) continue;
-        if (!now_replay_.allow(now_authorized_boot_, header.sender_boot_nonce,
-                               header.sender_uptime_ms))
+            memcmp(rx.mac, now_authorized_mac_, 6) != 0) {
+            ++diag_reject_peer;
             continue;
+        }
+        if (!now_replay_.allow(now_authorized_boot_, header.sender_boot_nonce,
+                               header.sender_uptime_ms)) {
+            ++diag_reject_replay;
+            continue;
+        }
         Record records[kMaxRecords]{};
         if (header.count)
             memcpy(records, rx.bytes + sizeof(prefix), header.count * sizeof(Record));
         Acceptance result{};
         uint32_t acceptance_duration_ms = 0;
         if (header.count) {
-            if (xSemaphoreTake(storage_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) continue;
+            if (xSemaphoreTake(storage_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+                ++diag_reject_storage;
+                continue;
+            }
             const uint32_t acceptance_start_ms = millis();
             result = recent_telemetry_v10.accept(header, records, device_id_);
             acceptance_duration_ms = millis() - acceptance_start_ms;
             xSemaphoreGive(storage_mutex_);
-            if (!result.count) continue;
+            if (!result.count) {
+                ++diag_reject_accept;
+                continue;
+            }
         } else {
             const Snapshot current = snapshot();
             if (!current.ever_measurement ||
@@ -585,6 +623,7 @@ void LocalHttpTelemetry::nowLoop() {
             now_diag_send(rx.mac,
                           reinterpret_cast<const uint8_t*>(&frame),
                           sizeof(frame), "NOW-ACK-TX");
+        if (!ack_tx_ok) ++diag_ack_send_fail;
         const uint32_t ack_processing_ms = ack_tx_start_ms - data_processing_start_ms;
         const uint32_t ack_total_ms = millis() - data_processing_start_ms;
         // Time measured only after dequeue. It excludes earlier queue latency.
@@ -637,10 +676,28 @@ void LocalHttpTelemetry::nowLoop() {
 }
 LocalHttpTelemetry::Snapshot LocalHttpTelemetry::snapshot() const {
     Snapshot copy{};
-    if (!mutex_ || xSemaphoreTake(mutex_, pdMS_TO_TICKS(5)) != pdTRUE) return copy;
-    copy = state_;
-    copy.snapshot_ok = true;
-    xSemaphoreGive(mutex_);
+    if (mutex_ && xSemaphoreTake(mutex_, pdMS_TO_TICKS(5)) == pdTRUE) {
+        copy = state_;
+        copy.snapshot_ok = true;
+        xSemaphoreGive(mutex_);
+    }
+    copy.now_rx_discovery = now_rx_discovery.load();
+    copy.now_rx_data = now_rx_data.load();
+    copy.now_rx_queue_full = now_rx_queue_full.load();
+    copy.now_discovery_valid = diag_discovery_valid.load();
+    copy.now_discovery_rejected = diag_discovery_rejected.load();
+    copy.now_discovery_peer_failed = diag_discovery_peer_failed.load();
+    copy.now_discovery_reply_ok = diag_discovery_reply_ok.load();
+    copy.now_discovery_reply_failed = diag_discovery_reply_failed.load();
+    copy.now_tx_ok = now_tx_ok.load();
+    copy.now_tx_failed = now_tx_fail.load();
+    copy.now_reject_auth = diag_reject_auth.load();
+    copy.now_reject_peer = diag_reject_peer.load();
+    copy.now_reject_replay = diag_reject_replay.load();
+    copy.now_reject_storage = diag_reject_storage.load();
+    copy.now_reject_accept = diag_reject_accept.load();
+    copy.now_ack_send_fail = diag_ack_send_fail.load();
+    copy.now_task_last_ms = diag_task_last_ms.load();
     return copy;
 }
 void LocalHttpTelemetry::diagnostics() {
