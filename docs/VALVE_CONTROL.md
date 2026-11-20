@@ -60,3 +60,10 @@ live polling below demonstrates stack headroom and increasing uptime.
   credentials, boiler ownership, gate or shutdown-obligation changes. Private
   recovery images, data and crash logs stay outside Git. Review found no remaining
   in-scope correctness/safety issue after the stack fix and live stress test.
+
+Owner follow-up: after the automated mode-only check, the owner confirms testing
+MANUAL/CLOSE from the tablet. Final read-only snapshots agree on AUTO/CLOSED,
+with Original outputs INPUT/INPUT and fresh S3 ESP-NOW; no setting is overwritten.
+An additional read-only actual tablet screenshot verifies green CLOSED in AUTO.
+The automatic checks issued no OPEN/CLOSE; later movements were owner tests.
+Final readback shows331s S3 uptime and the same12064-byte minimum stack margin.
