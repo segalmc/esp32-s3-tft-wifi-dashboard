@@ -1,4 +1,5 @@
 #include "BoilerWeb.h"
+#include "ValveApiPolicy.h"
 #if TFT_HARDWARE_ENABLED
 #include "BoilerWebPolicy.h"
 #include "BoilerWebApi.h"
@@ -32,7 +33,9 @@ void BoilerWeb::begin(NatureNetworkManager* network, TuyaControl* control,
   control_ = control;
   telemetry_ = telemetry;
   randomHex(login_csrf_, 16);
-  if (xTaskCreate(taskEntry, "boiler-web", 12288, this, 1, nullptr) != pdPASS)
+  // Status serialization nests WebServer, snapshots and ArduinoJson frames.
+  // The 12KiB task hit its stack canary under concurrent tablet/status polling.
+  if (xTaskCreate(taskEntry, "boiler-web", 24576, this, 1, nullptr) != pdPASS)
     Serial.println("Boiler Web: task unavailable");
 }
 void BoilerWeb::taskEntry(void* context) { static_cast<BoilerWeb*>(context)->run(); }
@@ -83,6 +86,8 @@ void BoilerWeb::configure() {
   server_->on("/logout", HTTP_POST, [this] { logout(); });
   server_->on("/api/status", HTTP_GET, [this] { status(); });
   server_->on("/api/command", HTTP_POST, [this] { command(); });
+  server_->on("/api/valve", HTTP_GET, [this] { valveStatus(); });
+  server_->on("/api/valve", HTTP_POST, [this] { valveCommand(); });
   server_->on("/api/v1/telemetry/challenge", HTTP_GET,
               [this] { telemetry_->challenge(*server_); });
   server_->on("/api/v1/telemetry", HTTP_POST,
@@ -248,7 +253,7 @@ void BoilerWeb::status() {
   data.otaPhase = otaPhaseName(ota.phase);
   data.otaPercent = ota.percent;
   data.otaError = ota.error;
-  DynamicJsonDocument document(5120);
+  DynamicJsonDocument document(6144);
   if (!boiler_web_api::populateStatus(document, data))
     return reject(503, "status unavailable");
   const auto link_state = telemetry_->snapshot();
@@ -310,6 +315,26 @@ void BoilerWeb::status() {
   diag["ackSendFailures"] = link_state.now_ack_send_fail;
   diag["taskAgeMs"] = link_state.now_task_last_ms ?
       static_cast<uint32_t>(link_now - link_state.now_task_last_ms) : UINT32_MAX;
+  const auto valve = telemetry_->valveSnapshot();
+  const bool valveFresh = valve_api::fresh(valve.seen,valve.received_ms,millis());
+  document["device"]["webStackFreeBytes"] = uxTaskGetStackHighWaterMark(nullptr);
+  JsonObject v = document.createNestedObject("valveControl");
+  v["fresh"] = valveFresh;
+  v["ageMs"] = valve.seen ? uint32_t(millis()-valve.received_ms) : UINT32_MAX;
+  v["mode"] = valveFresh ? (valve.frame.mode == 2 ? "MANUAL" : "AUTO") : "UNKNOWN";
+  v["target"] = valveFresh ? (valve.frame.target == 1 ? "OPEN" : valve.frame.target == 2 ? "CLOSED" : "UNKNOWN") : "UNKNOWN";
+  v["phase"] = valveFresh ? valve.frame.phase : 0;
+  v["allowed"] = valveFresh && valve.frame.allowed;
+  v["restoration"] = valveFresh ? valve_link::restoration_name(valve.frame.restoration) : "UNKNOWN";
+  v["commandId"] = valve.frame.command_id;
+  v["commandSession"] = telemetry_->valveSession();
+  v["protocolVersion"] = 1;
+  v["firmwareVersion"] = "valve-ui-v3";
+  v["result"] = valveFresh ? valve_link::result_name(valve.frame.result) : "UNKNOWN";
+  v["reason"] = valveFresh ? valve.frame.reason : "CONTROLLER_STALE";
+  v["positionMeasured"] = false;
+  v["source"] = "ORIGINAL_PHYSICAL_RELAYS";
+  v["controllerReason"] = valve_link::controller_reason_name(valve.frame.controller_reason);
   String body;
   body.reserve(2400);
   serializeJson(document, body);
@@ -362,5 +387,42 @@ void BoilerWeb::command() {
   serializeJson(receipt, body);
   headers();
   server_->send(202, "application/json", body);
+}
+void BoilerWeb::valveStatus() {
+  if (!authorized()) return reject(401, "sign in required");
+  const auto v = telemetry_->valveSnapshot();
+  const bool fresh = valve_api::fresh(v.seen,v.received_ms,millis());
+  StaticJsonDocument<768> doc;
+  doc["fresh"] = fresh;
+  doc["ageMs"] = v.seen ? uint32_t(millis()-v.received_ms) : UINT32_MAX;
+  doc["mode"] = fresh ? (v.frame.mode == 2 ? "MANUAL" : "AUTO") : "UNKNOWN";
+  doc["target"] = fresh ? (v.frame.target == 1 ? "OPEN" : v.frame.target == 2 ? "CLOSED" : "UNKNOWN") : "UNKNOWN";
+  static const char* phases[] = {"UNKNOWN","INTERLOCK","OPENING","CLOSING","OPEN_INFERRED","CLOSED_INFERRED","FAULT"};
+  doc["phase"] = fresh ? phases[v.frame.phase] : "UNKNOWN";
+  doc["allowed"] = fresh && v.frame.allowed;
+  doc["restoration"] = fresh ? valve_link::restoration_name(v.frame.restoration) : "UNKNOWN";
+  doc["commandId"] = v.frame.command_id;
+  doc["commandSession"] = telemetry_->valveSession();
+  doc["protocolVersion"] = 1;
+  doc["firmwareVersion"] = "valve-ui-v3";
+  doc["result"] = fresh ? valve_link::result_name(v.frame.result) : "UNKNOWN";
+  doc["reason"] = fresh ? v.frame.reason : "CONTROLLER_STALE";
+  doc["positionMeasured"] = false;
+  doc["controllerReason"] = valve_link::controller_reason_name(v.frame.controller_reason);
+  String body; serializeJson(doc, body); headers(); server_->send(200,"application/json",body);
+}
+void BoilerWeb::valveCommand() {
+  if (!csrfValid()) return reject(403, "forbidden");
+  if (!valve_api::request_valid(server_->clientContentLength(),server_->args(),server_->hasArg("action")))
+    return reject(400, "invalid valve request");
+  const String a = server_->arg("action");
+  const uint8_t action = valve_api::action(a.c_str(),a.length());
+  if (!action) return reject(400,"invalid valve action");
+  const auto v = telemetry_->valveSnapshot();
+  if ((action == valve_link::open || action == valve_link::close) &&
+      (!v.frame.allowed || v.frame.mode != 2)) return reject(409,"manual movement unavailable");
+  const uint32_t id = telemetry_->valveCommand(action);
+  if (!id) return reject(503,"controller stale or queue unavailable");
+  headers(); server_->send(202,"application/json",String("{\"stage\":\"S3_RECEIVED\",\"commandId\":")+id+",\"commandSession\":\""+telemetry_->valveSession()+"\"}");
 }
 #endif

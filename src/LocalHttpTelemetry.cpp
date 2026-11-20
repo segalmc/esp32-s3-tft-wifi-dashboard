@@ -216,6 +216,7 @@ uint64_t LocalHttpTelemetry::randomNonce() {
     return value;
 }
 void LocalHttpTelemetry::begin(NatureNetworkManager* network) {
+    valve_commands_ = xQueueCreate(4, sizeof(valve_link::Frame));
     network_ = network;
     mutex_ = xSemaphoreCreateMutex();
     storage_mutex_ = xSemaphoreCreateMutex();
@@ -473,6 +474,12 @@ void LocalHttpTelemetry::nowLoop() {
     uint32_t last_rx_report_ms = millis();
     for (;;) {
         diag_task_last_ms.store(millis(), std::memory_order_relaxed);
+        valve_link::Frame command{};
+        while (valve_commands_ && xQueueReceive(valve_commands_, &command, 0) == pdTRUE) {
+            if (command.original_boot != now_authorized_boot_ || !command.original_boot) continue;
+            if (mac(key_, &command, offsetof(valve_link::Frame, mac), command.mac))
+                esp_now_send(now_authorized_mac_, reinterpret_cast<const uint8_t*>(&command), sizeof(command));
+        }
         if (xQueueReceive(now_queue_, &rx, pdMS_TO_TICKS(1000)) != pdTRUE) continue;
         if (millis() - last_rx_report_ms >= 30000) {
             last_rx_report_ms = millis();
@@ -481,6 +488,19 @@ void LocalHttpTelemetry::nowLoop() {
                           (unsigned long)now_rx_data.load(),
                           (unsigned long)now_rx_other.load(),
                           (unsigned long)now_rx_queue_full.load());
+        }
+        if (rx.length == sizeof(valve_link::Frame)) {
+            valve_link::Frame f{}; memcpy(&f, rx.bytes, sizeof(f));
+            if (memcmp(rx.mac, now_authorized_mac_, 6) ||
+                !valve_link::valid(f, 2, device_id_, now_authorized_boot_, server_boot_) ||
+                !verify_mac(key_, &f, offsetof(valve_link::Frame, mac), f.mac)) continue;
+            portENTER_CRITICAL(&valve_mux_);
+            if (!valve_.seen || valve_.frame.original_boot != f.original_boot ||
+                f.sequence > valve_.frame.sequence) {
+                valve_.frame = f; valve_.received_ms = millis(); valve_.seen = true;
+            }
+            portEXIT_CRITICAL(&valve_mux_);
+            continue;
         }
         if (rx.length == sizeof(DiscoveryFrame)) {
             DiscoveryFrame request{};
@@ -761,5 +781,31 @@ void LocalHttpTelemetry::discoveryLoop() {
         }
         vTaskDelay(pdMS_TO_TICKS(25));
     }
+}
+LocalHttpTelemetry::ValveSnapshot LocalHttpTelemetry::valveSnapshot() const {
+    ValveSnapshot copy;
+    portENTER_CRITICAL(&valve_mux_); copy = valve_; portEXIT_CRITICAL(&valve_mux_);
+    return copy;
+}
+uint32_t LocalHttpTelemetry::valveCommand(uint8_t action) {
+    if (action < valve_link::manual || action > valve_link::stop || !valve_commands_ ||
+        valve_id_ == UINT32_MAX) return 0;
+    const auto state = valveSnapshot();
+    if (!state.seen || uint32_t(millis()-state.received_ms)>3000) return 0;
+    valve_link::Frame command;
+    command.kind = 1; command.action = action; command.command_id = ++valve_id_;
+    command.device = device_id_; command.s3_boot = server_boot_;
+    command.original_boot = state.frame.original_boot;
+    // Deadline uses authenticated Original monotonic time. Never replay on timeout.
+    command.deadline_ms = state.frame.uptime_ms + 4000;
+    if (action == valve_link::stop) {
+        xQueueReset(valve_commands_);
+        return xQueueSendToFront(valve_commands_, &command, 0) == pdTRUE ? command.command_id : 0;
+    }
+    return xQueueSend(valve_commands_, &command, 0) == pdTRUE ? command.command_id : 0;
+}
+String LocalHttpTelemetry::valveSession() const {
+    char value[17]; snprintf(value,sizeof(value),"%016llx",static_cast<unsigned long long>(server_boot_));
+    return String(value);
 }
 #endif

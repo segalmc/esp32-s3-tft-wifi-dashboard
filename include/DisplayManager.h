@@ -22,7 +22,7 @@ class DisplayManager {
   void updateOta(NatureNetworkManager::OtaSnapshot ota, const char* password,
                  bool reveal, uint32_t now_ms);
   void updateBoiler(TuyaControl::Snapshot state);
-  void updateTelemetry(LocalHttpTelemetry::Snapshot state);
+  void updateTelemetry(LocalHttpTelemetry::Snapshot state, LocalHttpTelemetry::ValveSnapshot valve);
   uint32_t lastRefreshUs() const { return last_refresh_us_; }
 #endif
 
@@ -55,9 +55,10 @@ class DisplayManager {
   uint32_t last_dashboard_ms_ = 0;
   TuyaControl::Snapshot boiler_state_{};
   LocalHttpTelemetry::Snapshot telemetry_state_{};
+  LocalHttpTelemetry::ValveSnapshot valve_state_{};
   TemperatureHistory* history_ = nullptr;
-  char telemetry_lines_[16][64] = {};
-  uint16_t telemetry_colors_[16] = {};
+  char telemetry_lines_[17][64] = {};
+  uint16_t telemetry_colors_[17] = {};
   int64_t last_history_expire_second_ = 0;
   uint32_t last_telemetry_sequence_ = 0;
   uint64_t last_telemetry_boot_ = 0;

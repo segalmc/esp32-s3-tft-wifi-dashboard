@@ -15,6 +15,7 @@
 #include "HttpTelemetryTransport.h"
 #include "NowTelemetryProtocol.h"
 #include "NowReplayGuard.h"
+#include "ValveLink.h"
 
 class LocalHttpTelemetry {
 public:
@@ -67,6 +68,10 @@ public:
         uint32_t now_ack_send_fail = 0;
         uint32_t now_task_last_ms = 0;
     };
+    struct ValveSnapshot { valve_link::Frame frame; uint32_t received_ms = 0; bool seen = false; };
+    ValveSnapshot valveSnapshot() const;
+    uint32_t valveCommand(uint8_t action);
+    String valveSession() const;
     void begin(NatureNetworkManager* network);
     void challenge(WebServer& web);
     void onRaw(WebServer& web);
@@ -100,6 +105,10 @@ private:
     mutable SemaphoreHandle_t mutex_ = nullptr;
     SemaphoreHandle_t storage_mutex_ = nullptr;
     QueueHandle_t now_queue_ = nullptr;
+    QueueHandle_t valve_commands_ = nullptr;
+    mutable portMUX_TYPE valve_mux_ = portMUX_INITIALIZER_UNLOCKED;
+    ValveSnapshot valve_{};
+    uint32_t valve_id_ = 0; // HTTP worker only; never wraps
     Snapshot state_{};
     uint8_t key_[32]{};
     uint64_t device_id_ = 0;

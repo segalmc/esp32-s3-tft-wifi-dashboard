@@ -1,3 +1,5 @@
+#include "ValvePresentation.h"
+#include "ValveApiPolicy.h"
 #include "DisplayManager.h"
 
 #include <Arduino.h>
@@ -114,7 +116,7 @@ void DisplayManager::drawDashboardFrame()
   tft_.drawString("BOILER", 16, 67);
   tft_.drawString("SOLAR", 171, 67);
   tft_.drawString("BOILER RELAY", 16, 220);
-  tft_.drawString("LED VALVE", 171, 220);
+  tft_.drawString("VALVE", 171, 220);
   tft_.drawString("ESP32 CONTROLLER", 16, 319);
   tft_.drawCircle(132, 169, 2, kTurquoise);
   tft_.drawString("C", 138, 162);
@@ -122,7 +124,6 @@ void DisplayManager::drawDashboardFrame()
   tft_.drawString("C", 293, 162);
   tft_.setTextFont(1);
   tft_.setTextColor(TFT_WHITE, kNavy);
-  tft_.drawString("SIMULATED / NO MOTOR", 171, 283);
   tft_.drawString("S3 IP", 16, 399);
   tft_.drawString("LAST RX", 171, 399);
   memset(telemetry_lines_, 0, sizeof(telemetry_lines_));
@@ -322,8 +323,9 @@ void DisplayManager::updateBoiler(TuyaControl::Snapshot state)
   boiler_state_ = state;
 }
 
-void DisplayManager::updateTelemetry(LocalHttpTelemetry::Snapshot state)
+void DisplayManager::updateTelemetry(LocalHttpTelemetry::Snapshot state, LocalHttpTelemetry::ValveSnapshot valve)
 {
+  valve_state_ = valve;
   if (!state.snapshot_ok)
     return;
   telemetry_state_ = state;
@@ -428,14 +430,17 @@ void DisplayManager::drawTelemetryPage()
   else strlcpy(label, "AUTO-OFF IDLE", sizeof(label));
   field(7, label, 16, 285, 135, 14, TFT_WHITE, 1, 1);
 
-  constexpr const char *valve_names[] = {"UNKNOWN", "WAIT", "OPENING",
-      "CLOSING", "OPEN", "CLOSED", "FAULT"};
-  const char *valve = sample.fresh && state.valve < 7 ?
-      valve_names[state.valve] : "UNKNOWN";
-  const uint16_t valve_color = strcmp(valve, "FAULT") == 0 ? TFT_RED :
-      strcmp(valve, "OPEN") == 0 || strcmp(valve, "CLOSED") == 0 ? TFT_GREEN :
-      strcmp(valve, "UNKNOWN") == 0 ? kOrange : TFT_WHITE;
-  field(8, valve, 171, 246, 135, 33, valve_color, 2, 2);
+  const auto valve = valve_presentation::view(valve_state_.frame.mode,
+      valve_state_.frame.phase, valve_state_.frame.target,
+      valve_api::fresh(valve_state_.seen, valve_state_.received_ms, now_ms));
+  using Tone = valve_presentation::Tone;
+  const uint16_t valve_color = valve.tone == Tone::fault ? TFT_RED :
+      valve.tone == Tone::warning ? kOrange :
+      valve.tone == Tone::automatic ? TFT_GREEN :
+      valve.tone == Tone::manual ? TFT_YELLOW : TFT_LIGHTGREY;
+  field(8, valve.text, 171, 246, 135, 33, valve_color, 2, 2);
+  field(16, valve.mode, 171, 281, 135, 13,
+        valve.tone == Tone::neutral ? TFT_LIGHTGREY : TFT_WHITE, 1, 1);
   const char* target_status = !sample.fresh ? "TARGET UNVERIFIED" :
       sample.recovery_active ? "RECOVERING TARGET" :
       strcmp(sample.storage_state, "READY") == 0 ? "TARGET SAVED" :

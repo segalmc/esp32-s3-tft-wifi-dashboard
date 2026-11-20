@@ -65,7 +65,7 @@ void loop() {
       original_telemetry_api::temperature_valid(heating_telemetry.boiler_c);
   tuya_control.updateTemperature(temperature_valid, heating_telemetry.boiler_c,
                                 heating_now_ms - measurement_age);
-  display_manager.updateTelemetry(heating_telemetry);
+  display_manager.updateTelemetry(heating_telemetry, local_http.valveSnapshot());
 #endif
   display_manager.update(now_ms);
 #if TFT_HARDWARE_ENABLED

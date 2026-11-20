@@ -28,6 +28,8 @@ class BoilerWeb {
   void logout();
   void status();
   void command();
+  void valveStatus();
+  void valveCommand();
   static void randomHex(char* output, size_t bytes);
   NatureNetworkManager* network_ = nullptr;
   TuyaControl* control_ = nullptr;
